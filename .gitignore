@@ -1,0 +1,11 @@
+node_modules/
+npm-debug.log
+
+.env
+placeholder.txt
+
+temp/
+deployments/
+
+.DS_Store
+Thumbs.db
