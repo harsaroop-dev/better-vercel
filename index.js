@@ -5,7 +5,7 @@ const fs = require("fs");
 const util = require("util");
 const execAsync = util.promisify(require("child_process").exec);
 const { createClient } = require("@supabase/supabase-js");
-
+const cors = require("cors");
 const app = express();
 const PORT = process.env.PORT || 8000;
 
@@ -14,6 +14,7 @@ const supabase = createClient(
   process.env.SUPABASE_KEY
 );
 
+app.use(cors());
 app.use(express.json());
 
 const BASE_DIR = path.join(__dirname, "deployments");

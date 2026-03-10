@@ -1,11 +1,23 @@
+
 node_modules/
+**/node_modules/
 npm-debug.log
 
+
 .env
+**/.env
+.env.*
+**/.env.*
 placeholder.txt
+
 
 temp/
 deployments/
+
+
+dist/
+**/dist/
+
 
 .DS_Store
 Thumbs.db
