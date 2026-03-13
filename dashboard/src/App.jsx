@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { createClient } from "@supabase/supabase-js";
+import { io } from "socket.io-client";
 import {
   Rocket,
   Github,
@@ -17,12 +17,11 @@ import {
 } from "lucide-react";
 import "./App.css";
 
-const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
-const SUPABASE_PUBLISHABLE_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
-const supabase = createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY);
+// Connect directly to our Node.js WebSocket Server
+const socket = io("http://localhost:8000");
 
 function App() {
-  const [activeTab, setActiveTab] = useState("deploy"); // 'deploy' | 'projects'
+  const [activeTab, setActiveTab] = useState("deploy");
   const [projects, setProjects] = useState([]);
   const [isLoadingProjects, setIsLoadingProjects] = useState(false);
 
@@ -36,22 +35,18 @@ function App() {
 
   const bottomRef = useRef(null);
 
-  // Fetch Projects when tab changes
   useEffect(() => {
-    if (activeTab === "projects") {
-      fetchProjects();
-    }
+    if (activeTab === "projects") fetchProjects();
   }, [activeTab]);
 
   const fetchProjects = async () => {
     setIsLoadingProjects(true);
-    const { data, error } = await supabase
-      .from("deployments")
-      .select("*")
-      .order("created_at", { ascending: false });
-
-    if (!error && data) {
+    try {
+      const response = await fetch("http://localhost:8000/projects");
+      const data = await response.json();
       setProjects(data);
+    } catch (error) {
+      console.error("Failed to fetch projects");
     }
     setIsLoadingProjects(false);
   };
@@ -85,33 +80,22 @@ function App() {
     }
   };
 
+  // --- THE NEW WEBSOCKET LISTENER ---
   useEffect(() => {
     if (!deploymentId) return;
 
-    const statusChannel = supabase
-      .channel("deployment_status")
-      .on(
-        "postgres_changes",
-        {
-          event: "UPDATE",
-          schema: "public",
-          table: "deployments",
-          filter: `id=eq.${deploymentId}`,
-        },
-        (payload) => setStatus(payload.new.status)
-      )
-      .subscribe();
+    // Tell the backend we want to listen to logs for THIS specific deployment
+    socket.emit("subscribe", deploymentId);
 
-    const logChannel = supabase
-      .channel(`logs-${deploymentId}`)
-      .on("broadcast", { event: "build-log" }, (payload) => {
-        setLogs((prev) => [...prev, payload.payload.message]);
-      })
-      .subscribe();
+    const handleLog = (message) => setLogs((prev) => [...prev, message]);
+    const handleStatus = (newStatus) => setStatus(newStatus);
+
+    socket.on("build-log", handleLog);
+    socket.on("status-update", handleStatus);
 
     return () => {
-      supabase.removeChannel(statusChannel);
-      supabase.removeChannel(logChannel);
+      socket.off("build-log", handleLog);
+      socket.off("status-update", handleStatus);
     };
   }, [deploymentId]);
 
@@ -153,7 +137,6 @@ function App() {
         <p>Deploy your static projects in seconds.</p>
       </div>
 
-      {/* NAVIGATION TABS */}
       <div className="nav-tabs">
         <button
           className={`nav-btn ${activeTab === "deploy" ? "active" : ""}`}
@@ -169,7 +152,6 @@ function App() {
         </button>
       </div>
 
-      {/* VIEW 1: DEPLOYMENT FORM */}
       {activeTab === "deploy" && (
         <div className="card">
           <form onSubmit={handleDeploy}>
@@ -269,23 +251,11 @@ function App() {
                   <div ref={bottomRef} />
                 </div>
               )}
-
-              {status === "SUCCESS" && (
-                <a
-                  href={liveUrl}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="live-link"
-                >
-                  <Globe size={16} /> Visit Live Deployment
-                </a>
-              )}
             </div>
           )}
         </div>
       )}
 
-      {/* VIEW 2: MY PROJECTS HISTORY */}
       {activeTab === "projects" && (
         <div className="history-grid">
           {isLoadingProjects ? (
@@ -336,7 +306,6 @@ function App() {
                     <StatusIcon stat={proj.status} /> {proj.status}
                   </div>
                 </div>
-
                 <div className="history-footer">
                   <div
                     style={{
@@ -347,23 +316,6 @@ function App() {
                   >
                     <Calendar size={14} /> {formatDate(proj.created_at)}
                   </div>
-                  {proj.status === "SUCCESS" && (
-                    <a
-                      href={`http://${proj.project_id}.lvh.me:8000`}
-                      target="_blank"
-                      rel="noreferrer"
-                      style={{
-                        color: "var(--text-main)",
-                        textDecoration: "none",
-                        display: "flex",
-                        alignItems: "center",
-                        gap: "4px",
-                        fontWeight: "500",
-                      }}
-                    >
-                      Visit <ExternalLink size={14} />
-                    </a>
-                  )}
                 </div>
               </div>
             ))
