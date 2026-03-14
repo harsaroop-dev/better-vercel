@@ -7,9 +7,10 @@ const cors = require("cors");
 const { spawn } = require("child_process");
 const path = require("path");
 const fs = require("fs");
+const mime = require("mime-types");
+const { S3Client, PutObjectCommand } = require("@aws-sdk/client-s3");
 
 const app = express();
-// We wrap Express in a standard HTTP server to attach WebSockets
 const server = http.createServer(app);
 const io = new Server(server, { cors: { origin: "*" } });
 
@@ -18,16 +19,22 @@ const PORT = process.env.PORT || 8000;
 app.use(cors());
 app.use(express.json());
 
-// --- DATABASE CONNECTION (Neon Serverless Postgres) ---
+// --- DATABASE & S3 CONNECTIONS ---
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  ssl: { rejectUnauthorized: false }, // Required for secure cloud databases
+  ssl: { rejectUnauthorized: false },
+});
+
+const s3 = new S3Client({
+  region: process.env.AWS_REGION,
+  credentials: {
+    accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
+  },
 });
 
 // --- WEBSOCKET ROOMS ---
 io.on("connection", (socket) => {
-  console.log("Frontend connected to WebSockets!");
-  // When a user deploys, they join a "room" specifically for that deployment ID
   socket.on("subscribe", (deploymentId) => {
     socket.join(deploymentId);
   });
@@ -35,7 +42,7 @@ io.on("connection", (socket) => {
 
 const TEMP_DIR = path.join(__dirname, "temp");
 
-// --- THE LOG STREAMING ENGINE (Now powered by Socket.io) ---
+// --- THE LOG STREAMING ENGINE ---
 function runCommandWithLogs(command, args, cwd, deploymentId) {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, { cwd, shell: true });
@@ -43,8 +50,6 @@ function runCommandWithLogs(command, args, cwd, deploymentId) {
     const streamOutput = (data) => {
       const text = data.toString().trim();
       if (!text) return;
-      console.log(`[${deploymentId}] ${text}`);
-      // Broadcast the log directly to the React frontend!
       io.to(deploymentId).emit("build-log", text);
     };
 
@@ -53,12 +58,11 @@ function runCommandWithLogs(command, args, cwd, deploymentId) {
 
     child.on("close", (code) => {
       if (code === 0) resolve();
-      else reject(new Error(`Command failed with exit code ${code}`));
+      else reject(new Error(`Exit code ${code}`));
     });
   });
 }
 
-// Database Helper Function
 async function updateStatus(deploymentId, status) {
   await pool.query("UPDATE deployments SET status = $1 WHERE id = $2", [
     status,
@@ -67,7 +71,41 @@ async function updateStatus(deploymentId, status) {
   io.to(deploymentId).emit("status-update", status);
 }
 
-// --- 1. THE ASYNC BUILD ENGINE ---
+// --- AWS S3 UPLOAD ENGINE ---
+async function uploadDirectoryToS3(dirPath, basePath, projectId, deploymentId) {
+  const files = fs.readdirSync(dirPath);
+
+  for (const file of files) {
+    const fullPath = path.join(dirPath, file);
+    if (fs.statSync(fullPath).isDirectory()) {
+      await uploadDirectoryToS3(fullPath, basePath, projectId, deploymentId);
+    } else {
+      const relativePath = path
+        .relative(basePath, fullPath)
+        .replace(/\\/g, "/");
+      const s3Key = `deployments/${projectId}/${relativePath}`;
+      const contentType = mime.lookup(fullPath) || "application/octet-stream";
+
+      const fileStream = fs.createReadStream(fullPath);
+
+      await s3.send(
+        new PutObjectCommand({
+          Bucket: process.env.AWS_S3_BUCKET_NAME,
+          Key: s3Key,
+          Body: fileStream,
+          ContentType: contentType,
+        })
+      );
+
+      io.to(deploymentId).emit(
+        "build-log",
+        `☁️ Uploaded to S3: ${relativePath}`
+      );
+    }
+  }
+}
+
+// --- THE ASYNC BUILD ENGINE ---
 async function buildProject(gitUrl, projectId, deploymentId) {
   const tempDir = path.join(TEMP_DIR, projectId);
   const sendSystemLog = (msg) =>
@@ -92,14 +130,27 @@ async function buildProject(gitUrl, projectId, deploymentId) {
     await runCommandWithLogs(buildCommand, [], __dirname, deploymentId);
 
     sendSystemLog("Locating compiled artifacts...");
+    const distPath = path.join(tempDir, "dist");
+    const buildPath = path.join(tempDir, "build");
+    const finalOutputDir = fs.existsSync(distPath)
+      ? distPath
+      : fs.existsSync(buildPath)
+      ? buildPath
+      : null;
 
-    // We are temporarily skipping the upload function to verify WebSockets work!
-    sendSystemLog(
-      "Skipping Cloud Upload temporarily. AWS S3 integration is next!"
+    if (!finalOutputDir)
+      throw new Error('Could not find "dist" or "build" folder.');
+
+    sendSystemLog("Initiating AWS S3 Cloud Upload...");
+    await uploadDirectoryToS3(
+      finalOutputDir,
+      finalOutputDir,
+      projectId,
+      deploymentId
     );
 
     await updateStatus(deploymentId, "SUCCESS");
-    sendSystemLog("Build Complete! Docker successfully ran on local engine.");
+    sendSystemLog("Deployment Complete! Project is now live globally.");
   } catch (error) {
     await updateStatus(deploymentId, "FAILED");
     sendSystemLog(`Build Failed: ${error.message}`);
@@ -109,16 +160,13 @@ async function buildProject(gitUrl, projectId, deploymentId) {
   }
 }
 
-// --- 2. THE REST API ENDPOINTS ---
-
-// Deploy Endpoint
+// --- REST API ENDPOINTS ---
 app.post("/deploy", async (req, res) => {
   const { gitUrl, projectId } = req.body;
   if (!gitUrl || !projectId)
     return res.status(400).json({ error: "Missing parameters" });
 
   try {
-    // Pure SQL to insert into Neon Database
     const result = await pool.query(
       "INSERT INTO deployments (project_id, git_url, status) VALUES ($1, $2, $3) RETURNING id",
       [projectId, gitUrl, "QUEUED"]
@@ -138,7 +186,6 @@ app.post("/deploy", async (req, res) => {
   }
 });
 
-// NEW: Fetch Projects Endpoint (Replaces Supabase Frontend Fetching)
 app.get("/projects", async (req, res) => {
   try {
     const result = await pool.query(
@@ -150,6 +197,39 @@ app.get("/projects", async (req, res) => {
   }
 });
 
+// --- THE REVERSE PROXY TRAFFIC COP (AWS S3 EDITION) ---
+app.use(async (req, res) => {
+  const subdomain = req.hostname.split(".")[0];
+  if (subdomain === "localhost" || subdomain === "api")
+    return res.status(200).send("Welcome to the Mini-Vercel Cloud Engine!");
+
+  let filePath = req.path;
+  if (filePath === "/") filePath = "/index.html";
+
+  // Fetch directly from your public AWS S3 Bucket
+  const s3Url = `https://${process.env.AWS_S3_BUCKET_NAME}.s3.${process.env.AWS_REGION}.amazonaws.com/deployments/${subdomain}${filePath}`;
+
+  try {
+    const response = await fetch(s3Url);
+
+    if (!response.ok) {
+      return res.status(404).send(`404 - File not found in AWS S3.`);
+    }
+
+    const exactContentType = mime.lookup(filePath) || "text/plain";
+    if (exactContentType === "text/html") {
+      res.setHeader("Content-Type", "text/html; charset=utf-8");
+    } else {
+      res.setHeader("Content-Type", exactContentType);
+    }
+
+    const arrayBuffer = await response.arrayBuffer();
+    res.send(Buffer.from(arrayBuffer));
+  } catch (error) {
+    res.status(500).send("500 - Cloud Proxy Error");
+  }
+});
+
 server.listen(PORT, () =>
-  console.log(`\n🚀 Mini-Vercel WebSocket Engine is running on port ${PORT}!`)
+  console.log(`\n🚀 Mini-Vercel AWS S3 Engine is running on port ${PORT}!`)
 );

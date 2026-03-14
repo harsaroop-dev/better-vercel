@@ -17,8 +17,9 @@ import {
 } from "lucide-react";
 import "./App.css";
 
-// Connect directly to our Node.js WebSocket Server
-const socket = io("http://localhost:8000");
+// Fallback to localhost for local development
+const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || "http://localhost:8000";
+const socket = io(BACKEND_URL);
 
 function App() {
   const [activeTab, setActiveTab] = useState("deploy");
@@ -42,7 +43,7 @@ function App() {
   const fetchProjects = async () => {
     setIsLoadingProjects(true);
     try {
-      const response = await fetch("http://localhost:8000/projects");
+      const response = await fetch(`${BACKEND_URL}/projects`);
       const data = await response.json();
       setProjects(data);
     } catch (error) {
@@ -58,7 +59,7 @@ function App() {
     setLogs([]);
 
     try {
-      const response = await fetch("http://localhost:8000/deploy", {
+      const response = await fetch(`${BACKEND_URL}/deploy`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ gitUrl, projectId }),
@@ -229,6 +230,45 @@ function App() {
                   </strong>
                 </span>
               </div>
+
+              {/* 🚨 THE NEW SUCCESS LINK BLOCK 🚨 */}
+              {status === "SUCCESS" && liveUrl && (
+                <div
+                  style={{
+                    marginTop: "16px",
+                    marginBottom: "16px",
+                    padding: "12px",
+                    backgroundColor: "#0f172a",
+                    borderRadius: "8px",
+                    border: "1px solid #1e293b",
+                  }}
+                >
+                  <p
+                    style={{
+                      margin: "0 0 8px 0",
+                      fontSize: "0.875rem",
+                      color: "#94a3b8",
+                    }}
+                  >
+                    ✨ Your site is live!
+                  </p>
+                  <a
+                    href={liveUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "8px",
+                      color: "#3b82f6",
+                      textDecoration: "none",
+                      fontWeight: "bold",
+                    }}
+                  >
+                    <Globe size={16} /> {liveUrl} <ExternalLink size={14} />
+                  </a>
+                </div>
+              )}
 
               {(logs.length > 0 || isDeploying) && (
                 <div className="terminal-window">
