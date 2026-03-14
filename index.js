@@ -101,10 +101,15 @@ async function uploadDirectoryToS3(dirPath, basePath, projectId, deploymentId) {
   }
 }
 
-async function buildProject(gitUrl, projectId, deploymentId) {
+async function buildProject(gitUrl, projectId, deploymentId, envVars = {}) {
   const tempDir = path.join(TEMP_DIR, projectId);
   const sendSystemLog = (msg) =>
     io.to(deploymentId).emit("build-log", `👉 [System] ${msg}`);
+
+  let dockerEnvString = "";
+  for (const [key, value] of Object.entries(envVars)) {
+    dockerEnvString += `-e ${key}="${value}" `;
+  }
 
   try {
     await updateStatus(deploymentId, "BUILDING");
@@ -131,11 +136,11 @@ else
     console.log "npm detected" && npm install && npm run build;
 fi
 `;
-
-    const buildCommand = `docker run --rm -v "${dockerVolumePath}:/app" -w /app -e NODE_OPTIONS=--openssl-legacy-provider node:18-alpine sh -c '${buildScript.replace(
+    const buildCommand = `docker run --rm -v "${dockerVolumePath}:/app" -w /app ${dockerEnvString}-e NODE_OPTIONS=--openssl-legacy-provider node:18-alpine sh -c '${buildScript.replace(
       /\n/g,
       " "
     )}'`;
+
     await runCommandWithLogs(buildCommand, [], __dirname, deploymentId);
 
     sendSystemLog("Locating compiled artifacts...");
@@ -170,18 +175,18 @@ fi
 }
 
 app.post("/deploy", async (req, res) => {
-  const { gitUrl, projectId } = req.body;
+  const { gitUrl, projectId, envVars } = req.body;
   if (!gitUrl || !projectId)
     return res.status(400).json({ error: "Missing parameters" });
 
   try {
     const result = await pool.query(
-      "INSERT INTO deployments (project_id, git_url, status) VALUES ($1, $2, $3) RETURNING id",
-      [projectId, gitUrl, "QUEUED"]
+      "INSERT INTO deployments (project_id, git_url, env_vars, status) VALUES ($1, $2, $3, $4) RETURNING id",
+      [projectId, gitUrl, envVars || {}, "QUEUED"]
     );
     const deploymentId = result.rows[0].id;
 
-    buildProject(gitUrl, projectId, deploymentId);
+    buildProject(gitUrl, projectId, deploymentId, envVars || {});
     res.status(200).json({
       message: "Queued!",
       deploymentId,
