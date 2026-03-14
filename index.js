@@ -129,11 +129,11 @@ async function buildProject(gitUrl, projectId, deploymentId, envVars = {}) {
 
     const buildScript = `
 if [ -f yarn.lock ]; then
-    console.log "Yarn detected" && yarn install && yarn build;
+    echo "Yarn detected" && yarn install && yarn build;
 elif [ -f pnpm-lock.yaml ]; then
-    console.log "pnpm detected" && npm install -g pnpm && pnpm install && pnpm run build;
+    echo "pnpm detected" && npm install -g pnpm && pnpm install && pnpm run build;
 else
-    console.log "npm detected" && npm install && npm run build;
+    echo "npm detected" && npm install && npm run build;
 fi
 `;
     const buildCommand = `docker run --rm -v "${dockerVolumePath}:/app" -w /app ${dockerEnvString}-e NODE_OPTIONS=--openssl-legacy-provider node:18-alpine sh -c '${buildScript.replace(
