@@ -17,7 +17,6 @@ import {
 } from "lucide-react";
 import "./App.css";
 
-// Fallback to localhost for local development
 const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || "http://localhost:8000";
 const socket = io(BACKEND_URL);
 
@@ -26,7 +25,6 @@ function App() {
   const [projects, setProjects] = useState([]);
   const [isLoadingProjects, setIsLoadingProjects] = useState(false);
 
-  // Deploy State
   const [gitUrl, setGitUrl] = useState("");
   const [projectId, setProjectId] = useState("");
   const [status, setStatus] = useState("IDLE");
@@ -81,11 +79,9 @@ function App() {
     }
   };
 
-  // --- THE NEW WEBSOCKET LISTENER ---
   useEffect(() => {
     if (!deploymentId) return;
 
-    // Tell the backend we want to listen to logs for THIS specific deployment
     socket.emit("subscribe", deploymentId);
 
     const handleLog = (message) => setLogs((prev) => [...prev, message]);

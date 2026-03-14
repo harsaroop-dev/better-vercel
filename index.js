@@ -19,7 +19,6 @@ const PORT = process.env.PORT || 8000;
 app.use(cors());
 app.use(express.json());
 
-// --- DATABASE & S3 CONNECTIONS ---
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: { rejectUnauthorized: false },
@@ -33,7 +32,6 @@ const s3 = new S3Client({
   },
 });
 
-// --- WEBSOCKET ROOMS ---
 io.on("connection", (socket) => {
   socket.on("subscribe", (deploymentId) => {
     socket.join(deploymentId);
@@ -42,7 +40,6 @@ io.on("connection", (socket) => {
 
 const TEMP_DIR = path.join(__dirname, "temp");
 
-// --- THE LOG STREAMING ENGINE ---
 function runCommandWithLogs(command, args, cwd, deploymentId) {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, { cwd, shell: true });
@@ -71,7 +68,6 @@ async function updateStatus(deploymentId, status) {
   io.to(deploymentId).emit("status-update", status);
 }
 
-// --- AWS S3 UPLOAD ENGINE ---
 async function uploadDirectoryToS3(dirPath, basePath, projectId, deploymentId) {
   const files = fs.readdirSync(dirPath);
 
@@ -105,7 +101,6 @@ async function uploadDirectoryToS3(dirPath, basePath, projectId, deploymentId) {
   }
 }
 
-// --- THE ASYNC BUILD ENGINE ---
 async function buildProject(gitUrl, projectId, deploymentId) {
   const tempDir = path.join(TEMP_DIR, projectId);
   const sendSystemLog = (msg) =>
@@ -126,7 +121,21 @@ async function buildProject(gitUrl, projectId, deploymentId) {
 
     sendSystemLog("Booting isolated Docker container...");
     const dockerVolumePath = tempDir.replace(/\\/g, "/");
-    const buildCommand = `docker run --rm -v "${dockerVolumePath}:/app" -w /app -e NODE_OPTIONS=--openssl-legacy-provider node:18-alpine sh -c "npm install && npm run build"`;
+
+    const buildScript = `
+if [ -f yarn.lock ]; then
+    console.log "Yarn detected" && yarn install && yarn build;
+elif [ -f pnpm-lock.yaml ]; then
+    console.log "pnpm detected" && npm install -g pnpm && pnpm install && pnpm run build;
+else
+    console.log "npm detected" && npm install && npm run build;
+fi
+`;
+
+    const buildCommand = `docker run --rm -v "${dockerVolumePath}:/app" -w /app -e NODE_OPTIONS=--openssl-legacy-provider node:18-alpine sh -c '${buildScript.replace(
+      /\n/g,
+      " "
+    )}'`;
     await runCommandWithLogs(buildCommand, [], __dirname, deploymentId);
 
     sendSystemLog("Locating compiled artifacts...");
@@ -160,7 +169,6 @@ async function buildProject(gitUrl, projectId, deploymentId) {
   }
 }
 
-// --- REST API ENDPOINTS ---
 app.post("/deploy", async (req, res) => {
   const { gitUrl, projectId } = req.body;
   if (!gitUrl || !projectId)
@@ -174,13 +182,11 @@ app.post("/deploy", async (req, res) => {
     const deploymentId = result.rows[0].id;
 
     buildProject(gitUrl, projectId, deploymentId);
-    res
-      .status(200)
-      .json({
-        message: "Queued!",
-        deploymentId,
-        liveUrl: `http://${projectId}.lvh.me:${PORT}`,
-      });
+    res.status(200).json({
+      message: "Queued!",
+      deploymentId,
+      liveUrl: `http://${projectId}.${req.hostname}.nip.io:${PORT}`,
+    });
   } catch (error) {
     res.status(500).json({ error: "Failed", details: error.message });
   }
@@ -197,7 +203,6 @@ app.get("/projects", async (req, res) => {
   }
 });
 
-// --- THE REVERSE PROXY TRAFFIC COP (AWS S3 EDITION) ---
 app.use(async (req, res) => {
   const subdomain = req.hostname.split(".")[0];
   if (subdomain === "localhost" || subdomain === "api")
@@ -206,7 +211,6 @@ app.use(async (req, res) => {
   let filePath = req.path;
   if (filePath === "/") filePath = "/index.html";
 
-  // Fetch directly from your public AWS S3 Bucket
   const s3Url = `https://${process.env.AWS_S3_BUCKET_NAME}.s3.${process.env.AWS_REGION}.amazonaws.com/deployments/${subdomain}${filePath}`;
 
   try {
