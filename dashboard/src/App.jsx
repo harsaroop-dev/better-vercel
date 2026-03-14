@@ -32,6 +32,8 @@ function App() {
   const [liveUrl, setLiveUrl] = useState("");
   const [logs, setLogs] = useState([]);
 
+  const [envKeys, setEnvKeys] = useState([{ key: "", value: "" }]);
+
   const bottomRef = useRef(null);
 
   useEffect(() => {
@@ -56,11 +58,16 @@ function App() {
     setDeploymentId(null);
     setLogs([]);
 
+    const formattedEnvVars = envKeys.reduce((acc, curr) => {
+      if (curr.key && curr.value) acc[curr.key] = curr.value;
+      return acc;
+    }, {});
+
     try {
       const response = await fetch(`${BACKEND_URL}/deploy`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ gitUrl, projectId }),
+        body: JSON.stringify({ gitUrl, projectId, envVars: formattedEnvVars }),
       });
 
       const data = await response.json();
@@ -185,6 +192,92 @@ function App() {
                 />
               </div>
             </div>
+
+            {/* --- ENVIRONMENT VARIABLES SECTION --- */}
+            <div className="input-group" style={{ marginTop: "24px" }}>
+              <label
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                }}
+              >
+                Environment Variables (Optional)
+                <button
+                  type="button"
+                  onClick={() =>
+                    setEnvKeys([...envKeys, { key: "", value: "" }])
+                  }
+                  style={{
+                    background: "none",
+                    border: "none",
+                    color: "#3b82f6",
+                    cursor: "pointer",
+                    fontSize: "0.875rem",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "4px",
+                  }}
+                >
+                  <Plus size={14} /> Add Variable
+                </button>
+              </label>
+
+              {envKeys.map((env, index) => (
+                <div
+                  key={index}
+                  style={{ display: "flex", gap: "8px", marginBottom: "8px" }}
+                >
+                  <input
+                    type="text"
+                    placeholder="KEY (e.g. VITE_API_URL)"
+                    value={env.key}
+                    onChange={(e) => {
+                      const newEnvs = [...envKeys];
+                      newEnvs[index].key = e.target.value
+                        .toUpperCase()
+                        .replace(/[^A-Z0-9_]/g, "");
+                      setEnvKeys(newEnvs);
+                    }}
+                    className="input-field"
+                    style={{ flex: 1, paddingLeft: "16px" }}
+                    disabled={isDeploying}
+                  />
+                  <input
+                    type="text"
+                    placeholder="VALUE"
+                    value={env.value}
+                    onChange={(e) => {
+                      const newEnvs = [...envKeys];
+                      newEnvs[index].value = e.target.value;
+                      setEnvKeys(newEnvs);
+                    }}
+                    className="input-field"
+                    style={{ flex: 2, paddingLeft: "16px" }}
+                    disabled={isDeploying}
+                  />
+                  {envKeys.length > 1 && (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setEnvKeys(envKeys.filter((_, i) => i !== index))
+                      }
+                      style={{
+                        background: "none",
+                        border: "none",
+                        color: "#ef4444",
+                        cursor: "pointer",
+                        padding: "0 8px",
+                      }}
+                      disabled={isDeploying}
+                    >
+                      <XCircle size={18} />
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+            {/* -------------------------------------- */}
 
             <button
               type="submit"
