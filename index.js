@@ -303,25 +303,39 @@ app.get("/auth/github/callback", async (req, res) => {
     res.redirect(`${process.env.FRONTEND_URL}?error=oauth_failed`);
   }
 });
+
 app.get("/github/repos", async (req, res) => {
-  const token = req.headers.authorization?.split(" ")[1];
-  if (!token) return res.status(401).json({ error: "Unauthorized" });
+  const authHeader = req.headers.authorization;
+  if (!authHeader) return res.status(401).json({ error: "Unauthorized" });
+
+  const appToken = authHeader.split(" ")[1];
 
   try {
+    const decoded = jwt.verify(appToken, process.env.JWT_SECRET);
+    const realGithubToken = decoded.githubToken;
+
     const reposResponse = await fetch(
       "https://api.github.com/user/repos?sort=updated&per_page=50",
       {
         headers: {
-          Authorization: `Bearer ${token}`,
+          Authorization: `Bearer ${realGithubToken}`,
           Accept: "application/vnd.github.v3+json",
         },
       }
     );
 
     const repos = await reposResponse.json();
+
+    if (!Array.isArray(repos)) {
+      return res.status(400).json({ error: "GitHub API error" });
+    }
+
     res.json(repos);
   } catch (error) {
-    res.status(500).json({ error: "Failed to fetch repositories" });
+    console.error("Repo Fetch Error:", error);
+    res
+      .status(500)
+      .json({ error: "Invalid token or failed to fetch repositories" });
   }
 });
 
