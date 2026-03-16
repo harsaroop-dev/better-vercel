@@ -1,6 +1,7 @@
 require("dotenv").config();
-const express = require("express");
 const http = require("http");
+const https = require("https");
+const express = require("express");
 const { Server } = require("socket.io");
 const { Pool } = require("pg");
 const cors = require("cors");
@@ -12,10 +13,32 @@ const { S3Client, PutObjectCommand } = require("@aws-sdk/client-s3");
 const jwt = require("jsonwebtoken");
 
 const app = express();
-const server = http.createServer(app);
-const io = new Server(server, { cors: { origin: "*" } });
-
 const PORT = process.env.PORT || 8000;
+
+let credentials = {};
+try {
+  credentials = {
+    key: fs.readFileSync(
+      "/etc/letsencrypt/live/bettervercel.harsaroop.com/privkey.pem",
+      "utf8"
+    ),
+    cert: fs.readFileSync(
+      "/etc/letsencrypt/live/bettervercel.harsaroop.com/fullchain.pem",
+      "utf8"
+    ),
+  };
+} catch (err) {
+  console.log(
+    "⚠️ No SSL certs found or permission denied. Running in HTTP-only mode."
+  );
+}
+
+const httpServer = http.createServer(app);
+const httpsServer = credentials.key
+  ? https.createServer(credentials, app)
+  : null;
+
+const io = new Server(httpsServer || httpServer, { cors: { origin: "*" } });
 
 app.use(cors());
 app.use(express.json());
@@ -260,8 +283,7 @@ app.post("/deploy", async (req, res) => {
     res.status(200).json({
       message: "Queued!",
       deploymentId,
-
-      liveUrl: `http://${projectId}.bettervercel.harsaroop.com`,
+      liveUrl: `https://${projectId}.bettervercel.harsaroop.com`,
     });
   } catch (error) {
     res.status(500).json({ error: "Failed", details: error.message });
@@ -304,12 +326,6 @@ app.post("/webhook", async (req, res) => {
 
       const newDeploymentId = deployResult.rows[0].id;
 
-      /* Note on Private Repos: Since webhooks happen in the background, 
-         there is no active user session to supply the GitHub Token. 
-         For public repos, passing an empty string "" works perfectly. 
-         (To support private repos via webhooks in the future, you would securely 
-         store the OAuth access_token in your Neon database during the login phase).
-      */
       buildProject(
         gitUrl,
         project.project_id,
@@ -472,6 +488,12 @@ app.use(async (req, res) => {
   }
 });
 
-server.listen(PORT, () =>
-  console.log(`\n🚀 Better-Vercel AWS S3 Engine is running on port ${PORT}!`)
-);
+httpServer.listen(PORT, () => {
+  console.log(`\n🚀 HTTP Engine running on port ${PORT}`);
+});
+
+if (httpsServer) {
+  httpsServer.listen(8443, () => {
+    console.log(`🔒 HTTPS Engine running securely on port 8443`);
+  });
+}
