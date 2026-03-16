@@ -229,6 +229,20 @@ app.post("/deploy", async (req, res) => {
   }
 
   try {
+    const existingProject = await pool.query(
+      "SELECT user_id FROM deployments WHERE project_id = $1 LIMIT 1",
+      [projectId]
+    );
+
+    if (existingProject.rows.length > 0) {
+      if (existingProject.rows[0].user_id !== userId) {
+        return res.status(403).json({
+          error:
+            "Project name is already taken by another user. Please choose a unique name.",
+        });
+      }
+    }
+
     const result = await pool.query(
       "INSERT INTO deployments (project_id, git_url, env_vars, status, user_id) VALUES ($1, $2, $3, $4, $5) RETURNING id",
       [projectId, gitUrl, envVars || {}, "QUEUED", userId]
@@ -246,6 +260,7 @@ app.post("/deploy", async (req, res) => {
     res.status(200).json({
       message: "Queued!",
       deploymentId,
+
       liveUrl: `http://${projectId}.bettervercel.harsaroop.com`,
     });
   } catch (error) {
