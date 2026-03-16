@@ -246,7 +246,7 @@ app.post("/deploy", async (req, res) => {
     res.status(200).json({
       message: "Queued!",
       deploymentId,
-      liveUrl: `http://${projectId}.${req.hostname}.nip.io:${PORT}`,
+      liveUrl: `http://${projectId}.bettervercel.harsaroop.com`,
     });
   } catch (error) {
     res.status(500).json({ error: "Failed", details: error.message });
