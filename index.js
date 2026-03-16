@@ -192,7 +192,7 @@ else
     echo "npm detected" && npm install && npm run build;
 fi;
 BUILD_EXIT=$?;
-chown -R 1000:1000 /app;
+chown -R $(id -u):$(id -g) /app;
 exit $BUILD_EXIT;
 `;
     const buildCommand = `docker run --rm -v "${dockerVolumePath}:/app" -w /app ${dockerEnvString}-e NODE_OPTIONS=--openssl-legacy-provider node:${nodeVersion}-alpine sh -c '${buildScript.replace(
@@ -272,9 +272,7 @@ app.post("/deploy", async (req, res) => {
     );
     const deploymentId = result.rows[0].id;
 
-    // --- AUTO-WEBHOOK MAGIC START ---
     if (realGithubToken) {
-      // Extract username and repo name from the Git URL (e.g., https://github.com/Username/Repo.git)
       const match = gitUrl.match(/github\.com\/([^/]+)\/([^/.]+)/);
 
       if (match) {
@@ -294,7 +292,7 @@ app.post("/deploy", async (req, res) => {
               active: true,
               events: ["push"],
               config: {
-                url: "http://13.127.96.165:8000/webhook", // Your AWS Webhook Listener
+                url: "http://13.127.96.165/webhook",
                 content_type: "json",
               },
             }),
@@ -303,14 +301,12 @@ app.post("/deploy", async (req, res) => {
             `[Auto-Webhook] Successfully injected webhook into ${owner}/${repo}`
           );
         } catch (webhookErr) {
-          // If the webhook already exists, GitHub throws an error, which we can safely ignore
           console.log(
             `[Auto-Webhook] Webhook setup skipped or already exists for ${owner}/${repo}`
           );
         }
       }
     }
-    // --- AUTO-WEBHOOK MAGIC END ---
 
     buildProject(
       gitUrl,
