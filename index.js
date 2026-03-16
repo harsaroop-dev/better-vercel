@@ -414,6 +414,64 @@ app.use(async (req, res) => {
   }
 });
 
+app.post("/webhook", async (req, res) => {
+  const payload = req.body;
+
+  if (
+    payload.ref !== "refs/heads/main" &&
+    payload.ref !== "refs/heads/master"
+  ) {
+    return res.status(200).send("Not a push to main. Ignoring.");
+  }
+
+  const gitUrl = payload.repository.clone_url;
+
+  try {
+    const result = await pool.query(
+      "SELECT DISTINCT project_id, env_vars, user_id FROM deployments WHERE git_url = $1",
+      [gitUrl]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(200).send("Repository not registered. Ignoring.");
+    }
+
+    for (const project of result.rows) {
+      const deployResult = await pool.query(
+        "INSERT INTO deployments (project_id, git_url, env_vars, status, user_id) VALUES ($1, $2, $3, $4, $5) RETURNING id",
+        [
+          project.project_id,
+          gitUrl,
+          project.env_vars,
+          "QUEUED",
+          project.user_id,
+        ]
+      );
+
+      const newDeploymentId = deployResult.rows[0].id;
+
+      /* Note on Private Repos: Since webhooks happen in the background, 
+         there is no active user session to supply the GitHub Token. 
+         For public repos, passing an empty string "" works perfectly. 
+         (To support private repos via webhooks in the future, you would securely 
+         store the OAuth access_token in your Neon database during the login phase).
+      */
+      buildProject(
+        gitUrl,
+        project.project_id,
+        newDeploymentId,
+        project.env_vars,
+        ""
+      );
+    }
+
+    res.status(200).send("Webhook received. Build triggered successfully.");
+  } catch (error) {
+    console.error("Webhook Error:", error);
+    res.status(500).send("Internal Server Error");
+  }
+});
+
 server.listen(PORT, () =>
   console.log(`\n🚀 Better-Vercel AWS S3 Engine is running on port ${PORT}!`)
 );
