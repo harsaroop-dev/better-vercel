@@ -14,6 +14,7 @@ import {
   Plus,
   Calendar,
   ExternalLink,
+  Lock,
 } from "lucide-react";
 import "./App.css";
 
@@ -47,7 +48,6 @@ function App() {
     if (token) {
       setGithubToken(token);
       localStorage.setItem("github_token", token);
-
       window.history.replaceState({}, document.title, window.location.pathname);
     }
   }, []);
@@ -81,11 +81,24 @@ function App() {
   }, [activeTab]);
 
   const fetchProjects = async () => {
+    if (!githubToken) {
+      setProjects([]);
+      return;
+    }
+
     setIsLoadingProjects(true);
     try {
-      const response = await fetch(`${BACKEND_URL}/projects`);
-      const data = await response.json();
-      setProjects(data);
+      const response = await fetch(`${BACKEND_URL}/projects`, {
+        headers: { Authorization: `Bearer ${githubToken}` },
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        setProjects(data);
+      } else {
+        console.error("Failed to authenticate");
+        setProjects([]);
+      }
     } catch (error) {
       console.error("Failed to fetch projects");
     }
@@ -107,6 +120,7 @@ function App() {
       const response = await fetch(`${BACKEND_URL}/deploy`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+
         body: JSON.stringify({
           gitUrl,
           projectId,
@@ -123,7 +137,10 @@ function App() {
         setStatus("QUEUED");
       } else {
         setStatus("FAILED");
-        setLogs((prev) => [...prev, `[Error] ${data.error}`]);
+        setLogs((prev) => [
+          ...prev,
+          `[Error] ${data.error || "Deployment failed"}`,
+        ]);
       }
     } catch (error) {
       setStatus("FAILED");
@@ -215,7 +232,7 @@ function App() {
       {activeTab === "deploy" && (
         <div className="card">
           <form onSubmit={handleDeploy}>
-            {/* --- UPGRADED GITHUB REPOSITORY SECTION --- */}
+            {/* --- UPGRADED: LOCKED DOWN UI --- */}
             <div className="input-group">
               <label
                 style={{
@@ -225,28 +242,7 @@ function App() {
                 }}
               >
                 GitHub Repository
-                {!githubToken ? (
-                  <button
-                    type="button"
-                    onClick={() =>
-                      (window.location.href = `${BACKEND_URL}/auth/github`)
-                    }
-                    style={{
-                      background: "#24292e",
-                      color: "white",
-                      border: "none",
-                      padding: "4px 12px",
-                      borderRadius: "4px",
-                      fontSize: "0.75rem",
-                      cursor: "pointer",
-                      display: "flex",
-                      alignItems: "center",
-                      gap: "6px",
-                    }}
-                  >
-                    <Github size={12} /> Connect Account
-                  </button>
-                ) : (
+                {githubToken && (
                   <button
                     type="button"
                     onClick={() => {
@@ -268,9 +264,55 @@ function App() {
                 )}
               </label>
 
-              <div className="input-wrapper">
-                <Github size={16} className="input-icon" />
-                {githubToken ? (
+              {!githubToken ? (
+                <div
+                  style={{
+                    padding: "24px",
+                    border: "1px dashed #334155",
+                    borderRadius: "8px",
+                    textAlign: "center",
+                    background: "#0f172a",
+                  }}
+                >
+                  <Lock
+                    size={24}
+                    color="#64748b"
+                    style={{ margin: "0 auto 12px auto", display: "block" }}
+                  />
+                  <p
+                    style={{
+                      margin: "0 0 16px 0",
+                      color: "#94a3b8",
+                      fontSize: "0.875rem",
+                    }}
+                  >
+                    You must connect your GitHub account to deploy securely.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      (window.location.href = `${BACKEND_URL}/auth/github`)
+                    }
+                    style={{
+                      background: "#24292e",
+                      color: "white",
+                      border: "none",
+                      padding: "8px 16px",
+                      borderRadius: "6px",
+                      fontSize: "0.875rem",
+                      cursor: "pointer",
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: "8px",
+                      fontWeight: "bold",
+                    }}
+                  >
+                    <Github size={16} /> Connect Account
+                  </button>
+                </div>
+              ) : (
+                <div className="input-wrapper">
+                  <Github size={16} className="input-icon" />
                   <select
                     required
                     value={gitUrl}
@@ -290,22 +332,17 @@ function App() {
                       </option>
                     ))}
                   </select>
-                ) : (
-                  <input
-                    type="url"
-                    placeholder="https://github.com/username/repo.git"
-                    required
-                    value={gitUrl}
-                    onChange={(e) => setGitUrl(e.target.value)}
-                    className="input-field"
-                    disabled={isDeploying}
-                  />
-                )}
-              </div>
+                </div>
+              )}
             </div>
-            {/* ------------------------------------------ */}
 
-            <div className="input-group">
+            <div
+              className="input-group"
+              style={{
+                opacity: githubToken ? 1 : 0.5,
+                pointerEvents: githubToken ? "auto" : "none",
+              }}
+            >
               <label>Project Name</label>
               <div className="input-wrapper">
                 <FolderGit2 size={16} className="input-icon" />
@@ -318,12 +355,19 @@ function App() {
                   className="input-field"
                   pattern="[a-z0-9-]+"
                   title="Only lowercase letters, numbers, and dashes"
-                  disabled={isDeploying}
+                  disabled={isDeploying || !githubToken}
                 />
               </div>
             </div>
 
-            <div className="input-group" style={{ marginTop: "24px" }}>
+            <div
+              className="input-group"
+              style={{
+                marginTop: "24px",
+                opacity: githubToken ? 1 : 0.5,
+                pointerEvents: githubToken ? "auto" : "none",
+              }}
+            >
               <label
                 style={{
                   display: "flex",
@@ -351,7 +395,6 @@ function App() {
                   <Plus size={14} /> Add Variable
                 </button>
               </label>
-
               {envKeys.map((env, index) => (
                 <div
                   key={index}
@@ -409,8 +452,9 @@ function App() {
 
             <button
               type="submit"
-              disabled={isDeploying || !gitUrl || !projectId}
+              disabled={isDeploying || !gitUrl || !projectId || !githubToken}
               className="deploy-btn"
+              style={{ opacity: githubToken ? 1 : 0.5 }}
             >
               {isDeploying ? (
                 <>
@@ -449,7 +493,6 @@ function App() {
                   </strong>
                 </span>
               </div>
-
               {status === "SUCCESS" && liveUrl && (
                 <div
                   style={{
@@ -487,7 +530,6 @@ function App() {
                   </a>
                 </div>
               )}
-
               {(logs.length > 0 || isDeploying) && (
                 <div className="terminal-window">
                   <div
@@ -516,12 +558,34 @@ function App() {
 
       {activeTab === "projects" && (
         <div className="history-grid">
-          {isLoadingProjects ? (
+          {!githubToken ? (
+            <div
+              className="card"
+              style={{ textAlign: "center", gridColumn: "1 / -1" }}
+            >
+              <Lock
+                size={32}
+                color="var(--text-muted)"
+                style={{ margin: "0 auto 16px auto", display: "block" }}
+              />
+              <h3 style={{ margin: "0 0 8px 0" }}>Authentication Required</h3>
+              <p
+                style={{
+                  margin: 0,
+                  color: "var(--text-muted)",
+                  fontSize: "0.875rem",
+                }}
+              >
+                Please connect your GitHub account to view your projects.
+              </p>
+            </div>
+          ) : isLoadingProjects ? (
             <div
               style={{
                 textAlign: "center",
                 padding: "40px",
                 color: "var(--text-muted)",
+                gridColumn: "1 / -1",
               }}
             >
               <Loader2
@@ -532,7 +596,10 @@ function App() {
               Loading history...
             </div>
           ) : projects.length === 0 ? (
-            <div className="card" style={{ textAlign: "center" }}>
+            <div
+              className="card"
+              style={{ textAlign: "center", gridColumn: "1 / -1" }}
+            >
               <FolderGit2
                 size={32}
                 color="var(--text-muted)"

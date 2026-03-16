@@ -211,18 +211,38 @@ exit $BUILD_EXIT;
 }
 
 app.post("/deploy", async (req, res) => {
-  const { gitUrl, projectId, envVars, githubToken } = req.body;
+  const { gitUrl, projectId, envVars, githubToken: appToken } = req.body;
   if (!gitUrl || !projectId)
     return res.status(400).json({ error: "Missing parameters" });
 
+  let realGithubToken = "";
+  let userId = null;
+
+  if (appToken) {
+    try {
+      const decoded = jwt.verify(appToken, process.env.JWT_SECRET);
+      realGithubToken = decoded.githubToken;
+      userId = decoded.userId;
+    } catch (err) {
+      return res.status(401).json({ error: "Invalid or expired session" });
+    }
+  }
+
   try {
     const result = await pool.query(
-      "INSERT INTO deployments (project_id, git_url, env_vars, status) VALUES ($1, $2, $3, $4) RETURNING id",
-      [projectId, gitUrl, envVars || {}, "QUEUED"]
+      "INSERT INTO deployments (project_id, git_url, env_vars, status, user_id) VALUES ($1, $2, $3, $4, $5) RETURNING id",
+      [projectId, gitUrl, envVars || {}, "QUEUED", userId]
     );
     const deploymentId = result.rows[0].id;
 
-    buildProject(gitUrl, projectId, deploymentId, envVars || {}, githubToken);
+    buildProject(
+      gitUrl,
+      projectId,
+      deploymentId,
+      envVars || {},
+      realGithubToken
+    );
+
     res.status(200).json({
       message: "Queued!",
       deploymentId,
@@ -234,13 +254,22 @@ app.post("/deploy", async (req, res) => {
 });
 
 app.get("/projects", async (req, res) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader) return res.status(401).json({ error: "Unauthorized" });
+
+  const appToken = authHeader.split(" ")[1];
+
   try {
+    const decoded = jwt.verify(appToken, process.env.JWT_SECRET);
+    const userId = decoded.userId;
+
     const result = await pool.query(
-      "SELECT * FROM deployments ORDER BY created_at DESC"
+      "SELECT * FROM deployments WHERE user_id = $1 ORDER BY created_at DESC",
+      [userId]
     );
     res.json(result.rows);
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: "Failed to authenticate or fetch projects" });
   }
 });
 
