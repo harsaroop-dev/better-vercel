@@ -272,6 +272,46 @@ app.post("/deploy", async (req, res) => {
     );
     const deploymentId = result.rows[0].id;
 
+    // --- AUTO-WEBHOOK MAGIC START ---
+    if (realGithubToken) {
+      // Extract username and repo name from the Git URL (e.g., https://github.com/Username/Repo.git)
+      const match = gitUrl.match(/github\.com\/([^/]+)\/([^/.]+)/);
+
+      if (match) {
+        const owner = match[1];
+        const repo = match[2];
+
+        try {
+          await fetch(`https://api.github.com/repos/${owner}/${repo}/hooks`, {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${realGithubToken}`,
+              Accept: "application/vnd.github.v3+json",
+              "User-Agent": "Better-Vercel-Engine",
+            },
+            body: JSON.stringify({
+              name: "web",
+              active: true,
+              events: ["push"],
+              config: {
+                url: "http://13.127.96.165:8000/webhook", // Your AWS Webhook Listener
+                content_type: "json",
+              },
+            }),
+          });
+          console.log(
+            `[Auto-Webhook] Successfully injected webhook into ${owner}/${repo}`
+          );
+        } catch (webhookErr) {
+          // If the webhook already exists, GitHub throws an error, which we can safely ignore
+          console.log(
+            `[Auto-Webhook] Webhook setup skipped or already exists for ${owner}/${repo}`
+          );
+        }
+      }
+    }
+    // --- AUTO-WEBHOOK MAGIC END ---
+
     buildProject(
       gitUrl,
       projectId,
