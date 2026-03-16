@@ -107,7 +107,12 @@ function App() {
       const response = await fetch(`${BACKEND_URL}/deploy`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ gitUrl, projectId, envVars: formattedEnvVars }),
+        body: JSON.stringify({
+          gitUrl,
+          projectId,
+          envVars: formattedEnvVars,
+          githubToken,
+        }),
       });
 
       const data = await response.json();

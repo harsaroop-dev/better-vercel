@@ -101,7 +101,13 @@ async function uploadDirectoryToS3(dirPath, basePath, projectId, deploymentId) {
   }
 }
 
-async function buildProject(gitUrl, projectId, deploymentId, envVars = {}) {
+async function buildProject(
+  gitUrl,
+  projectId,
+  deploymentId,
+  envVars = {},
+  githubToken = ""
+) {
   const tempDir = path.join(TEMP_DIR, projectId);
   const sendSystemLog = (msg) =>
     io.to(deploymentId).emit("build-log", `👉 [System] ${msg}`);
@@ -117,9 +123,14 @@ async function buildProject(gitUrl, projectId, deploymentId, envVars = {}) {
       fs.rmSync(tempDir, { recursive: true, force: true });
 
     sendSystemLog("Cloning repository...");
+
+    const authenticatedGitUrl = githubToken
+      ? gitUrl.replace("https://", `https://${githubToken}@`)
+      : gitUrl;
+
     await runCommandWithLogs(
       "git",
-      ["clone", gitUrl, `"${tempDir}"`],
+      ["clone", authenticatedGitUrl, `"${tempDir}"`],
       __dirname,
       deploymentId
     );
@@ -175,7 +186,7 @@ fi
 }
 
 app.post("/deploy", async (req, res) => {
-  const { gitUrl, projectId, envVars } = req.body;
+  const { gitUrl, projectId, envVars, githubToken } = req.body;
   if (!gitUrl || !projectId)
     return res.status(400).json({ error: "Missing parameters" });
 
@@ -186,7 +197,7 @@ app.post("/deploy", async (req, res) => {
     );
     const deploymentId = result.rows[0].id;
 
-    buildProject(gitUrl, projectId, deploymentId, envVars || {});
+    buildProject(gitUrl, projectId, deploymentId, envVars || {}, githubToken);
     res.status(200).json({
       message: "Queued!",
       deploymentId,
