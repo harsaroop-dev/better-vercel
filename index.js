@@ -9,6 +9,7 @@ const path = require("path");
 const fs = require("fs");
 const mime = require("mime-types");
 const { S3Client, PutObjectCommand } = require("@aws-sdk/client-s3");
+const jwt = require("jsonwebtoken");
 
 const app = express();
 const server = http.createServer(app);
@@ -268,17 +269,40 @@ app.get("/auth/github/callback", async (req, res) => {
         }),
       }
     );
-
     const tokenData = await tokenResponse.json();
     const accessToken = tokenData.access_token;
 
-    res.redirect(`${process.env.FRONTEND_URL}?token=${accessToken}`);
+    const userResponse = await fetch("https://api.github.com/user", {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    const userData = await userResponse.json();
+
+    const dbResult = await pool.query(
+      `INSERT INTO users (github_id, username, avatar_url) 
+       VALUES ($1, $2, $3) 
+       ON CONFLICT (github_id) 
+       DO UPDATE SET username = $2, avatar_url = $3 
+       RETURNING id`,
+      [userData.id.toString(), userData.login, userData.avatar_url]
+    );
+    const internalUserId = dbResult.rows[0].id;
+
+    const appToken = jwt.sign(
+      {
+        userId: internalUserId,
+        githubToken: accessToken,
+        username: userData.login,
+      },
+      process.env.JWT_SECRET,
+      { expiresIn: "7d" }
+    );
+
+    res.redirect(`${process.env.FRONTEND_URL}?token=${appToken}`);
   } catch (error) {
     console.error("OAuth Error:", error);
     res.redirect(`${process.env.FRONTEND_URL}?error=oauth_failed`);
   }
 });
-
 app.get("/github/repos", async (req, res) => {
   const token = req.headers.authorization?.split(" ")[1];
   if (!token) return res.status(401).json({ error: "Unauthorized" });
@@ -304,7 +328,7 @@ app.get("/github/repos", async (req, res) => {
 app.use(async (req, res) => {
   const subdomain = req.hostname.split(".")[0];
   if (subdomain === "localhost" || subdomain === "api")
-    return res.status(200).send("Welcome to the Mini-Vercel Cloud Engine!");
+    return res.status(200).send("Welcome to the Better-Vercel Cloud Engine!");
 
   let filePath = req.path;
   if (filePath === "/") filePath = "/index.html";
@@ -333,5 +357,5 @@ app.use(async (req, res) => {
 });
 
 server.listen(PORT, () =>
-  console.log(`\n🚀 Mini-Vercel AWS S3 Engine is running on port ${PORT}!`)
+  console.log(`\n🚀 Better-Vercel AWS S3 Engine is running on port ${PORT}!`)
 );

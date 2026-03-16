@@ -193,7 +193,7 @@ function App() {
   return (
     <div className="container">
       <div className="header">
-        <h1>Mini-Vercel</h1>
+        <h1>Better-Vercel</h1>
         <p>Deploy your static projects in seconds.</p>
       </div>
 
