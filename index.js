@@ -138,6 +138,27 @@ async function buildProject(
     sendSystemLog("Booting isolated Docker container...");
     const dockerVolumePath = tempDir.replace(/\\/g, "/");
 
+    sendSystemLog("Analyzing package.json for Node version...");
+    let nodeVersion = "20";
+
+    const packageJsonPath = path.join(tempDir, "package.json");
+    if (fs.existsSync(packageJsonPath)) {
+      try {
+        const pkgData = fs.readFileSync(packageJsonPath, "utf8");
+        const pkgJson = JSON.parse(pkgData);
+
+        if (pkgJson.engines && pkgJson.engines.node) {
+          const match = pkgJson.engines.node.match(/\d+/);
+          if (match) {
+            nodeVersion = match[0];
+            sendSystemLog(`Detected Node.js requirement: v${nodeVersion}`);
+          }
+        }
+      } catch (err) {
+        sendSystemLog("Could not parse package.json, using default Node 20.");
+      }
+    }
+
     const buildScript = `
 if [ -f yarn.lock ]; then
     echo "Yarn detected" && yarn install && yarn build;
@@ -147,7 +168,7 @@ else
     echo "npm detected" && npm install && npm run build;
 fi
 `;
-    const buildCommand = `docker run --rm -v "${dockerVolumePath}:/app" -w /app ${dockerEnvString}-e NODE_OPTIONS=--openssl-legacy-provider node:18-alpine sh -c '${buildScript.replace(
+    const buildCommand = `docker run --rm -v "${dockerVolumePath}:/app" -w /app ${dockerEnvString}-e NODE_OPTIONS=--openssl-legacy-provider node:${nodeVersion}-alpine sh -c '${buildScript.replace(
       /\n/g,
       " "
     )}'`;
@@ -219,17 +240,11 @@ app.get("/projects", async (req, res) => {
   }
 });
 
-// ==========================================
-// GITHUB OAUTH ROUTES
-// ==========================================
-
-// 1. Send the user to GitHub to log in
 app.get("/auth/github", (req, res) => {
   const githubAuthUrl = `https://github.com/login/oauth/authorize?client_id=${process.env.GITHUB_CLIENT_ID}&scope=repo`;
   res.redirect(githubAuthUrl);
 });
 
-// 2. Catch the secure code GitHub sends back and trade it for an Access Token
 app.get("/auth/github/callback", async (req, res) => {
   const { code } = req.query;
   if (!code) return res.status(400).send("No code provided");
@@ -254,7 +269,6 @@ app.get("/auth/github/callback", async (req, res) => {
     const tokenData = await tokenResponse.json();
     const accessToken = tokenData.access_token;
 
-    // Send the user back to the React dashboard with their new token
     res.redirect(`${process.env.FRONTEND_URL}?token=${accessToken}`);
   } catch (error) {
     console.error("OAuth Error:", error);
@@ -262,7 +276,6 @@ app.get("/auth/github/callback", async (req, res) => {
   }
 });
 
-// 3. Fetch the user's repositories using their token
 app.get("/github/repos", async (req, res) => {
   const token = req.headers.authorization?.split(" ")[1];
   if (!token) return res.status(401).json({ error: "Unauthorized" });
@@ -285,9 +298,6 @@ app.get("/github/repos", async (req, res) => {
   }
 });
 
-// ==========================================
-// WILDCARD S3 PROXY ROUTE
-// ==========================================
 app.use(async (req, res) => {
   const subdomain = req.hostname.split(".")[0];
   if (subdomain === "localhost" || subdomain === "api")
