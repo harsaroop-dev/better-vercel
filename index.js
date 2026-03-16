@@ -208,6 +208,75 @@ app.get("/projects", async (req, res) => {
   }
 });
 
+// ==========================================
+// GITHUB OAUTH ROUTES
+// ==========================================
+
+// 1. Send the user to GitHub to log in
+app.get("/auth/github", (req, res) => {
+  const githubAuthUrl = `https://github.com/login/oauth/authorize?client_id=${process.env.GITHUB_CLIENT_ID}&scope=repo`;
+  res.redirect(githubAuthUrl);
+});
+
+// 2. Catch the secure code GitHub sends back and trade it for an Access Token
+app.get("/auth/github/callback", async (req, res) => {
+  const { code } = req.query;
+  if (!code) return res.status(400).send("No code provided");
+
+  try {
+    const tokenResponse = await fetch(
+      "https://github.com/login/oauth/access_token",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+        },
+        body: JSON.stringify({
+          client_id: process.env.GITHUB_CLIENT_ID,
+          client_secret: process.env.GITHUB_CLIENT_SECRET,
+          code: code,
+        }),
+      }
+    );
+
+    const tokenData = await tokenResponse.json();
+    const accessToken = tokenData.access_token;
+
+    // Send the user back to the React dashboard with their new token
+    res.redirect(`${process.env.FRONTEND_URL}?token=${accessToken}`);
+  } catch (error) {
+    console.error("OAuth Error:", error);
+    res.redirect(`${process.env.FRONTEND_URL}?error=oauth_failed`);
+  }
+});
+
+// 3. Fetch the user's repositories using their token
+app.get("/github/repos", async (req, res) => {
+  const token = req.headers.authorization?.split(" ")[1];
+  if (!token) return res.status(401).json({ error: "Unauthorized" });
+
+  try {
+    const reposResponse = await fetch(
+      "https://api.github.com/user/repos?sort=updated&per_page=50",
+      {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: "application/vnd.github.v3+json",
+        },
+      }
+    );
+
+    const repos = await reposResponse.json();
+    res.json(repos);
+  } catch (error) {
+    res.status(500).json({ error: "Failed to fetch repositories" });
+  }
+});
+
+// ==========================================
+// WILDCARD S3 PROXY ROUTE
+// ==========================================
 app.use(async (req, res) => {
   const subdomain = req.hostname.split(".")[0];
   if (subdomain === "localhost" || subdomain === "api")

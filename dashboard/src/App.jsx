@@ -31,10 +31,50 @@ function App() {
   const [deploymentId, setDeploymentId] = useState(null);
   const [liveUrl, setLiveUrl] = useState("");
   const [logs, setLogs] = useState([]);
-
   const [envKeys, setEnvKeys] = useState([{ key: "", value: "" }]);
 
+  const [githubToken, setGithubToken] = useState(
+    localStorage.getItem("github_token") || ""
+  );
+  const [userRepos, setUserRepos] = useState([]);
+  const [isLoadingRepos, setIsLoadingRepos] = useState(false);
+
   const bottomRef = useRef(null);
+
+  useEffect(() => {
+    const urlParams = new URLSearchParams(window.location.search);
+    const token = urlParams.get("token");
+    if (token) {
+      setGithubToken(token);
+      localStorage.setItem("github_token", token);
+
+      window.history.replaceState({}, document.title, window.location.pathname);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (githubToken) {
+      const fetchRepos = async () => {
+        setIsLoadingRepos(true);
+        try {
+          const response = await fetch(`${BACKEND_URL}/github/repos`, {
+            headers: { Authorization: `Bearer ${githubToken}` },
+          });
+          if (response.ok) {
+            const data = await response.json();
+            setUserRepos(data);
+          } else {
+            setGithubToken("");
+            localStorage.removeItem("github_token");
+          }
+        } catch (error) {
+          console.error("Failed to fetch GitHub repos", error);
+        }
+        setIsLoadingRepos(false);
+      };
+      fetchRepos();
+    }
+  }, [githubToken]);
 
   useEffect(() => {
     if (activeTab === "projects") fetchProjects();
@@ -134,6 +174,17 @@ function App() {
     });
   };
 
+  const handleRepoSelect = (e) => {
+    const url = e.target.value;
+    setGitUrl(url);
+    if (url) {
+      const name = url.split("/").pop().replace(".git", "");
+      setProjectId(name.toLowerCase().replace(/[^a-z0-9-]/g, "-"));
+    } else {
+      setProjectId("");
+    }
+  };
+
   return (
     <div className="container">
       <div className="header">
@@ -159,21 +210,95 @@ function App() {
       {activeTab === "deploy" && (
         <div className="card">
           <form onSubmit={handleDeploy}>
+            {/* --- UPGRADED GITHUB REPOSITORY SECTION --- */}
             <div className="input-group">
-              <label>GitHub Repository</label>
+              <label
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                }}
+              >
+                GitHub Repository
+                {!githubToken ? (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      (window.location.href = `${BACKEND_URL}/auth/github`)
+                    }
+                    style={{
+                      background: "#24292e",
+                      color: "white",
+                      border: "none",
+                      padding: "4px 12px",
+                      borderRadius: "4px",
+                      fontSize: "0.75rem",
+                      cursor: "pointer",
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "6px",
+                    }}
+                  >
+                    <Github size={12} /> Connect Account
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setGithubToken("");
+                      localStorage.removeItem("github_token");
+                      setUserRepos([]);
+                      setGitUrl("");
+                    }}
+                    style={{
+                      background: "none",
+                      color: "#ef4444",
+                      border: "none",
+                      fontSize: "0.75rem",
+                      cursor: "pointer",
+                    }}
+                  >
+                    Disconnect
+                  </button>
+                )}
+              </label>
+
               <div className="input-wrapper">
                 <Github size={16} className="input-icon" />
-                <input
-                  type="url"
-                  placeholder="https://github.com/username/repo.git"
-                  required
-                  value={gitUrl}
-                  onChange={(e) => setGitUrl(e.target.value)}
-                  className="input-field"
-                  disabled={isDeploying}
-                />
+                {githubToken ? (
+                  <select
+                    required
+                    value={gitUrl}
+                    onChange={handleRepoSelect}
+                    className="input-field"
+                    disabled={isDeploying || isLoadingRepos}
+                    style={{ appearance: "auto", cursor: "pointer" }}
+                  >
+                    <option value="">
+                      {isLoadingRepos
+                        ? "Loading your repositories..."
+                        : "Select a repository to deploy..."}
+                    </option>
+                    {userRepos.map((repo) => (
+                      <option key={repo.id} value={repo.clone_url}>
+                        {repo.full_name} {repo.private ? " 🔒" : ""}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <input
+                    type="url"
+                    placeholder="https://github.com/username/repo.git"
+                    required
+                    value={gitUrl}
+                    onChange={(e) => setGitUrl(e.target.value)}
+                    className="input-field"
+                    disabled={isDeploying}
+                  />
+                )}
               </div>
             </div>
+            {/* ------------------------------------------ */}
 
             <div className="input-group">
               <label>Project Name</label>
@@ -193,7 +318,6 @@ function App() {
               </div>
             </div>
 
-            {/* --- ENVIRONMENT VARIABLES SECTION --- */}
             <div className="input-group" style={{ marginTop: "24px" }}>
               <label
                 style={{
@@ -277,7 +401,6 @@ function App() {
                 </div>
               ))}
             </div>
-            {/* -------------------------------------- */}
 
             <button
               type="submit"
@@ -286,11 +409,13 @@ function App() {
             >
               {isDeploying ? (
                 <>
-                  <Loader2 size={18} className="spin" /> Deploying...
+                  {" "}
+                  <Loader2 size={18} className="spin" /> Deploying...{" "}
                 </>
               ) : (
                 <>
-                  <Rocket size={18} /> Deploy
+                  {" "}
+                  <Rocket size={18} /> Deploy{" "}
                 </>
               )}
             </button>
@@ -320,7 +445,6 @@ function App() {
                 </span>
               </div>
 
-              {/* 🚨 THE NEW SUCCESS LINK BLOCK 🚨 */}
               {status === "SUCCESS" && liveUrl && (
                 <div
                   style={{
