@@ -166,7 +166,11 @@ elif [ -f pnpm-lock.yaml ]; then
     echo "pnpm detected" && npm install -g pnpm && pnpm install && pnpm run build;
 else
     echo "npm detected" && npm install && npm run build;
-fi
+fi;
+
+BUILD_EXIT=$?
+chown -R 1000:1000 /app
+exit $BUILD_EXIT
 `;
     const buildCommand = `docker run --rm -v "${dockerVolumePath}:/app" -w /app ${dockerEnvString}-e NODE_OPTIONS=--openssl-legacy-provider node:${nodeVersion}-alpine sh -c '${buildScript.replace(
       /\n/g,
