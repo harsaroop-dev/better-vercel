@@ -202,13 +202,13 @@ if [ -f yarn.lock ]; then
 elif [ -f pnpm-lock.yaml ]; then
     echo "pnpm detected" && npm install -g pnpm && pnpm install && pnpm run build;
 else
-    echo "npm detected" && npm install && npm run build;
+    echo "npm detected" && npm install --no-audit --no-fund && npm run build;
 fi;
 BUILD_EXIT=$?;
 chown -R $(id -u):$(id -g) /app;
 exit $BUILD_EXIT;
 `;
-    const buildCommand = `docker run --rm -v "${dockerVolumePath}:/app" -w /app ${dockerEnvString}-e NODE_OPTIONS=--openssl-legacy-provider node:${nodeVersion}-alpine sh -c '${buildScript.replace(
+    const buildCommand = `docker run --rm -v "${dockerVolumePath}:/app" -w /app ${dockerEnvString}-e NODE_OPTIONS=--openssl-legacy-provider node:${nodeVersion}-slim sh -c '${buildScript.replace(
       /\n/g,
       " "
     )}'`;
