@@ -38,7 +38,11 @@ const httpsServer = credentials.key
   ? https.createServer(credentials, app)
   : null;
 
-const io = new Server(httpsServer || httpServer, { cors: { origin: "*" } });
+const io = new Server({ cors: { origin: "*" } });
+io.attach(httpServer);
+if (httpsServer) {
+  io.attach(httpsServer);
+}
 
 app.use(cors());
 app.use(express.json());
@@ -71,6 +75,7 @@ function runCommandWithLogs(command, args, cwd, deploymentId) {
     const streamOutput = (data) => {
       const text = data.toString().trim();
       if (!text) return;
+      console.log(`[Docker Log] ${text}`);
       io.to(deploymentId).emit("build-log", text);
     };
 
@@ -133,8 +138,10 @@ async function buildProject(
   githubToken = ""
 ) {
   const tempDir = path.join(TEMP_DIR, projectId);
-  const sendSystemLog = (msg) =>
+  const sendSystemLog = (msg) => {
+    console.log(`[Project: ${projectId}] ${msg}`);
     io.to(deploymentId).emit("build-log", `👉 [System] ${msg}`);
+  };
 
   let dockerEnvString = "";
   for (const [key, value] of Object.entries(envVars)) {
