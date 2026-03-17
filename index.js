@@ -201,10 +201,7 @@ echo "Transferring files to native storage...";
 mkdir -p /tmp/build_env;
 cp -a /app/. /tmp/build_env/;
 cd /tmp/build_env;
-
-# The Magic Collar: Force Node to aggressively clean up RAM
 export NODE_OPTIONS="--max-old-space-size=512";
-
 if [ -f yarn.lock ]; then
     echo "Yarn detected" && yarn install && yarn build;
 elif [ -f pnpm-lock.yaml ]; then
@@ -213,7 +210,6 @@ else
     echo "npm detected" && npm cache clean --force && npm install --no-audit --no-fund && npm run build;
 fi;
 BUILD_EXIT=$?;
-
 echo "Transferring artifacts back to host...";
 if [ -d "dist" ]; then cp -a dist /app/; fi;
 if [ -d "build" ]; then cp -a build /app/; fi;
