@@ -201,18 +201,29 @@ echo "Transferring files to native storage...";
 mkdir -p /tmp/build_env;
 cp -a /app/. /tmp/build_env/;
 cd /tmp/build_env;
+
 export NODE_OPTIONS="--max-old-space-size=512";
-if [ -f yarn.lock ]; then
-    echo "Yarn detected" && yarn install && yarn build;
-elif [ -f pnpm-lock.yaml ]; then
-    echo "pnpm detected" && npm install -g pnpm && pnpm install && pnpm run build;
+
+if [ -f package.json ]; then
+    if [ -f yarn.lock ]; then
+        echo "Yarn detected" && yarn install && yarn build;
+    elif [ -f pnpm-lock.yaml ]; then
+        echo "pnpm detected" && npm install -g pnpm && pnpm install && pnpm run build;
+    else
+        echo "npm detected" && npm cache clean --force && npm install --no-audit --no-fund && npm run build;
+    fi;
 else
-    echo "npm detected" && npm cache clean --force && npm install --no-audit --no-fund && npm run build;
+    echo "No package.json found. Treating as static HTML project.";
+    mkdir -p dist;
+    find . -maxdepth 1 ! -name 'dist' ! -name '.' ! -name '..' -exec cp -r {} dist/ \\;
 fi;
+
 BUILD_EXIT=$?;
+
 echo "Transferring artifacts back to host...";
 if [ -d "dist" ]; then cp -a dist /app/; fi;
 if [ -d "build" ]; then cp -a build /app/; fi;
+
 chown -R 1000:1000 /app;
 exit $BUILD_EXIT;
 `;
