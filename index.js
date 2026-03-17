@@ -5,7 +5,7 @@ const express = require("express");
 const { Server } = require("socket.io");
 const { Pool } = require("pg");
 const cors = require("cors");
-const { spawn } = require("child_process");
+const { spawn, execSync } = require("child_process");
 const path = require("path");
 const fs = require("fs");
 const mime = require("mime-types");
@@ -143,8 +143,14 @@ async function buildProject(
 
   try {
     await updateStatus(deploymentId, "BUILDING");
-    if (fs.existsSync(tempDir))
-      fs.rmSync(tempDir, { recursive: true, force: true });
+
+    if (fs.existsSync(tempDir)) {
+      try {
+        execSync(`sudo rm -rf "${tempDir}"`);
+      } catch (cleanErr) {
+        sendSystemLog("Notice: Clean-up skipped or folder already empty.");
+      }
+    }
 
     sendSystemLog("Cloning repository...");
 
@@ -228,8 +234,11 @@ exit $BUILD_EXIT;
     await updateStatus(deploymentId, "FAILED");
     sendSystemLog(`Build Failed: ${error.message}`);
   } finally {
-    if (fs.existsSync(tempDir))
-      fs.rmSync(tempDir, { recursive: true, force: true });
+    if (fs.existsSync(tempDir)) {
+      try {
+        execSync(`sudo rm -rf "${tempDir}"`);
+      } catch (cleanErr) {}
+    }
   }
 }
 
