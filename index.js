@@ -213,7 +213,7 @@ if [ -f package.json ]; then
 else
     echo "No package.json found. Treating as static HTML project.";
     mkdir -p dist;
-    find . -maxdepth 1 ! -name 'dist' ! -name '.' ! -name '..' -exec cp -r {} dist/ \\;
+    find . -maxdepth 1 ! -name 'dist' ! -name '.' ! -name '..' -exec cp -r {} dist/ \\; ;
 fi;
 BUILD_EXIT=$?;
 echo "Transferring artifacts back to host...";
