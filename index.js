@@ -197,10 +197,10 @@ async function buildProject(
     }
 
     const buildScript = `
-echo "Transferring files to native container storage..."
-cp -a /app /tmp/build_env
-cd /tmp/build_env
-
+echo "Transferring files to native storage...";
+mkdir -p /tmp/build_env;
+cp -a /app/. /tmp/build_env/;
+cd /tmp/build_env;
 if [ -f yarn.lock ]; then
     echo "Yarn detected" && yarn install && yarn build;
 elif [ -f pnpm-lock.yaml ]; then
@@ -209,15 +209,13 @@ else
     echo "npm detected" && npm install && npm run build;
 fi;
 BUILD_EXIT=$?;
-
-echo "Transferring compiled artifacts back to host..."
-if [ -d "dist" ]; then cp -a dist /app/dist; fi;
-if [ -d "build" ]; then cp -a build /app/build; fi;
-
-# Hand ownership back to the Ubuntu user (UID 1000)
+echo "Transferring artifacts back to host...";
+if [ -d "dist" ]; then cp -a dist /app/; fi;
+if [ -d "build" ]; then cp -a build /app/; fi;
 chown -R 1000:1000 /app;
 exit $BUILD_EXIT;
 `;
+
     const buildCommand = `docker run --rm -v "${dockerVolumePath}:/app" ${dockerEnvString}node:${nodeVersion}-slim sh -c '${buildScript.replace(
       /\n/g,
       " "
