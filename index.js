@@ -207,8 +207,10 @@ if [ -f package.json ]; then
         echo "Yarn detected" && yarn install && yarn build;
     elif [ -f pnpm-lock.yaml ]; then
         echo "pnpm detected" && npm install -g pnpm && pnpm install && pnpm run build;
+    elif [ -f package-lock.json ]; then
+        echo "npm lockfile detected! Running optimized ci..." && npm ci --no-audit --no-fund && npm run build;
     else
-        echo "npm detected" && npm cache clean --force && npm install --no-audit --no-fund && npm run build;
+        echo "No lockfile detected. Running standard npm install..." && npm install --no-audit --no-fund && npm run build;
     fi;
 else
     echo "No package.json found. Treating as static HTML project.";
