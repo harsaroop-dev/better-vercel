@@ -198,17 +198,16 @@ async function buildProject(
 
     const buildScript = `
 echo "Transferring files to native storage...";
-mkdir -p /tmp/build_env;
-cp -a /app/. /tmp/build_env/;
-cd /tmp/build_env;
-export NODE_OPTIONS="--max-old-space-size=512";
+mkdir -p /build_env;
+cp -a /app/. /build_env/;
+cd /build_env;
 if [ -f package.json ]; then
     if [ -f yarn.lock ]; then
         echo "Yarn detected" && yarn install && yarn build;
     elif [ -f pnpm-lock.yaml ]; then
         echo "pnpm detected" && npm install -g pnpm && pnpm install && pnpm run build;
     elif [ -f package-lock.json ]; then
-        echo "npm lockfile detected! Running optimized ci..." && npm ci --no-audit --no-fund && npm run build;
+        echo "npm lockfile detected! Running optimized ci..." && npm ci --no-audit --no-fund --prefer-offline && npm run build;
     else
         echo "No lockfile detected. Running standard npm install..." && npm install --no-audit --no-fund && npm run build;
     fi;
@@ -225,7 +224,7 @@ chown -R 1000:1000 /app;
 exit $BUILD_EXIT;
 `;
 
-    const buildCommand = `docker run --rm -v "${dockerVolumePath}:/app" ${dockerEnvString}node:${nodeVersion}-slim sh -c '${buildScript.replace(
+    const buildCommand = `docker run --rm --network host -v "${dockerVolumePath}:/app" ${dockerEnvString}node:${nodeVersion}-slim sh -c '${buildScript.replace(
       /\n/g,
       " "
     )}'`;
