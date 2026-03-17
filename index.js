@@ -202,7 +202,7 @@ if [ -f yarn.lock ]; then
 elif [ -f pnpm-lock.yaml ]; then
     echo "pnpm detected" && npm install -g pnpm && pnpm install && pnpm run build;
 else
-    echo "npm detected" && npm install --no-audit --no-fund && npm run build;
+    echo "npm detected" && npm config set maxsockets 1 && npm install --no-audit --no-fund --loglevel verbose && npm run build;
 fi;
 BUILD_EXIT=$?;
 chown -R $(id -u):$(id -g) /app;
