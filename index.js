@@ -626,7 +626,7 @@ app.get("/github/repos", async (req, res) => {
       }
     );
 
-    const repos = await repos.json();
+    const repos = await reposResponse.json();
 
     if (!Array.isArray(repos)) {
       return res.status(400).json({ error: "GitHub API error" });
