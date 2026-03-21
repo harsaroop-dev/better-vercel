@@ -264,7 +264,7 @@ CMD ["node", "server.js"]
         "🔨 Building Docker Image (This may take a few minutes)..."
       );
       await runCommandWithLogs(
-        `docker build -t image-${projectId} .`,
+        `docker build --network host -t image-${projectId} .`,
         [],
         tempDir,
         deploymentId
