@@ -17,11 +17,13 @@ const httpProxy = require("http-proxy");
 const app = express();
 const PORT = process.env.PORT || 8000;
 
+// Setup the internal proxy for Next.js containers
 const proxy = httpProxy.createProxyServer({});
 proxy.on("error", function (err, req, res) {
   res.status(500).send("502 Bad Gateway: Container is booting or down.");
 });
 
+// Map to track which port each Next.js project is running on
 const activeNextDeployments = new Map();
 
 let credentials = {};
@@ -271,6 +273,8 @@ CMD ["node", "server.js"]
       sendSystemLog(
         "🔨 Building Docker Image (This may take a few minutes)..."
       );
+
+      // Added --network host to bypass Docker DNS wildcard looping
       await runCommandWithLogs(
         `docker build --network host -t image-${projectId} .`,
         [],
@@ -284,6 +288,7 @@ CMD ["node", "server.js"]
       const runCommand = `docker run -d --name project-${projectId} --restart unless-stopped -p ${dynamicPort}:3000 ${dockerEnvString} image-${projectId}`;
       await runCommandWithLogs(runCommand, [], tempDir, deploymentId);
 
+      // Register the project in our memory map for the Proxy Router
       activeNextDeployments.set(projectId, dynamicPort);
 
       sendSystemLog(
@@ -633,11 +638,13 @@ app.use(async (req, res) => {
   if (subdomain === "localhost" || subdomain === "api")
     return res.status(200).send("Welcome to the Better-Vercel Cloud Engine!");
 
+  // If this subdomain matches a running Next.js container, proxy it internally
   if (activeNextDeployments.has(subdomain)) {
     const targetPort = activeNextDeployments.get(subdomain);
     return proxy.web(req, res, { target: `http://127.0.0.1:${targetPort}` });
   }
 
+  // Otherwise, fallback to S3 for static assets
   let filePath = req.path;
   if (filePath === "/") filePath = "/index.html";
 
