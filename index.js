@@ -240,12 +240,11 @@ RUN npm run build
 FROM node:${nodeVersion}-slim AS runner
 WORKDIR /app
 ENV NODE_ENV production
-COPY --from=builder /app/package*.json ./
-COPY --from=builder /app/node_modules ./node_modules
-COPY --from=builder /app/.next ./.next
-COPY --from=builder /app/public ./public
+# 1. Copy everything to preserve complex templates (Contentlayer, Prisma, etc.)
+COPY --from=builder /app ./
 EXPOSE 3000
-CMD ["npm", "start"]
+# 2. Force the production binary to bypass rogue package.json scripts
+CMD ["npx", "next", "start"]
       `;
       fs.writeFileSync(
         path.join(tempDir, "Dockerfile"),
