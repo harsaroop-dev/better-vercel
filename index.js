@@ -11,6 +11,7 @@ const fs = require("fs");
 const mime = require("mime-types");
 const { S3Client, PutObjectCommand } = require("@aws-sdk/client-s3");
 const jwt = require("jsonwebtoken");
+const net = require("net");
 
 const app = express();
 const PORT = process.env.PORT || 8000;
@@ -67,6 +68,20 @@ io.on("connection", (socket) => {
 });
 
 const TEMP_DIR = path.join(__dirname, "temp");
+
+function getAvailablePort() {
+  return new Promise((resolve, reject) => {
+    const server = net.createServer();
+    server.unref();
+    server.on("error", reject);
+    server.listen(0, () => {
+      const port = server.address().port;
+      server.close(() => {
+        resolve(port);
+      });
+    });
+  });
+}
 
 function runCommandWithLogs(command, args, cwd, deploymentId) {
   return new Promise((resolve, reject) => {
@@ -172,17 +187,22 @@ async function buildProject(
       deploymentId
     );
 
-    sendSystemLog("Booting isolated Docker container...");
-    const dockerVolumePath = tempDir.replace(/\\/g, "/");
-
-    sendSystemLog("Analyzing package.json for Node version...");
+    sendSystemLog("Analyzing package.json for Node version and framework...");
     let nodeVersion = "20";
+    let isNextJs = false;
 
     const packageJsonPath = path.join(tempDir, "package.json");
     if (fs.existsSync(packageJsonPath)) {
       try {
         const pkgData = fs.readFileSync(packageJsonPath, "utf8");
         const pkgJson = JSON.parse(pkgData);
+
+        if (pkgJson.dependencies && pkgJson.dependencies.next) {
+          isNextJs = true;
+          sendSystemLog(
+            "🚀 Next.js framework detected! Switching to stateful pipeline."
+          );
+        }
 
         if (pkgJson.engines && pkgJson.engines.node) {
           const match = pkgJson.engines.node.match(/\d+/);
@@ -196,7 +216,106 @@ async function buildProject(
       }
     }
 
-    const buildScript = `
+    if (isNextJs) {
+      sendSystemLog("⚙️ Generating optimized Next.js Dockerfile...");
+
+      const nextConfigPath = path.join(tempDir, "next.config.js");
+      if (!fs.existsSync(nextConfigPath)) {
+        fs.writeFileSync(
+          nextConfigPath,
+          `module.exports = { output: 'standalone' };`
+        );
+        sendSystemLog("Injected next.config.js for standalone output.");
+      } else {
+        sendSystemLog(
+          "⚠️ Ensure your next.config.js has output: 'standalone' enabled for memory optimization."
+        );
+      }
+
+      const dockerfileContent = `
+FROM node:${nodeVersion}-slim AS builder
+WORKDIR /app
+COPY package*.json ./
+RUN npm install
+COPY . .
+RUN npm run build
+RUN mkdir -p /app/public
+
+FROM node:${nodeVersion}-slim AS runner
+WORKDIR /app
+ENV NODE_ENV production
+COPY --from=builder /app/public ./public
+COPY --from=builder /app/.next/standalone ./
+COPY --from=builder /app/.next/static ./.next/static
+EXPOSE 3000
+CMD ["node", "server.js"]
+      `;
+      fs.writeFileSync(
+        path.join(tempDir, "Dockerfile"),
+        dockerfileContent.trim()
+      );
+
+      try {
+        execSync(`docker rm -f project-${projectId}`, { stdio: "ignore" });
+        sendSystemLog("Removed previous container instance.");
+      } catch (e) {}
+
+      sendSystemLog(
+        "🔨 Building Docker Image (This may take a few minutes)..."
+      );
+      await runCommandWithLogs(
+        `docker build -t image-${projectId} .`,
+        [],
+        tempDir,
+        deploymentId
+      );
+
+      sendSystemLog("Assigning dynamic port and booting container...");
+      const dynamicPort = await getAvailablePort();
+
+      const runCommand = `docker run -d --name project-${projectId} --restart unless-stopped -p ${dynamicPort}:3000 ${dockerEnvString} image-${projectId}`;
+      await runCommandWithLogs(runCommand, [], tempDir, deploymentId);
+
+      sendSystemLog(
+        `✅ Container running successfully on internal port ${dynamicPort}`
+      );
+
+      sendSystemLog("Configuring Live Cloud Routing (Nginx)...");
+      const nginxConfig = `server {
+    listen 80;
+    server_name ${projectId}.bettervercel.harsaroop.com;
+
+    location / {
+        proxy_pass http://127.0.0.1:${dynamicPort};
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host $host;
+        proxy_cache_bypass $http_upgrade;
+    }
+}`;
+      const nginxFilePath = `/etc/nginx/conf.d/${projectId}.conf`;
+
+      try {
+        fs.writeFileSync(`/tmp/${projectId}.conf`, nginxConfig);
+        execSync(`sudo mv /tmp/${projectId}.conf ${nginxFilePath}`);
+        execSync("sudo systemctl reload nginx");
+        sendSystemLog("Reverse proxy reloaded. Traffic is live.");
+      } catch (nginxErr) {
+        throw new Error(`Routing configuration failed: ${nginxErr.message}`);
+      }
+
+      await updateStatus(deploymentId, "SUCCESS");
+      sendSystemLog(
+        "Deployment Complete! Serverless architecture provisioned."
+      );
+    } else {
+      sendSystemLog(
+        "Booting isolated Docker container for static compilation..."
+      );
+      const dockerVolumePath = tempDir.replace(/\\/g, "/");
+
+      const buildScript = `
 echo "Transferring files to native storage...";
 mkdir -p /build_env;
 cp -a /app/. /build_env/;
@@ -224,35 +343,36 @@ chown -R 1000:1000 /app;
 exit $BUILD_EXIT;
 `;
 
-    const buildCommand = `docker run --rm --network host -v "${dockerVolumePath}:/app" ${dockerEnvString}node:${nodeVersion}-slim sh -c '${buildScript.replace(
-      /\n/g,
-      " "
-    )}'`;
+      const buildCommand = `docker run --rm --network host -v "${dockerVolumePath}:/app" ${dockerEnvString}node:${nodeVersion}-slim sh -c '${buildScript.replace(
+        /\n/g,
+        " "
+      )}'`;
 
-    await runCommandWithLogs(buildCommand, [], __dirname, deploymentId);
+      await runCommandWithLogs(buildCommand, [], __dirname, deploymentId);
 
-    sendSystemLog("Locating compiled artifacts...");
-    const distPath = path.join(tempDir, "dist");
-    const buildPath = path.join(tempDir, "build");
-    const finalOutputDir = fs.existsSync(distPath)
-      ? distPath
-      : fs.existsSync(buildPath)
-      ? buildPath
-      : null;
+      sendSystemLog("Locating compiled artifacts...");
+      const distPath = path.join(tempDir, "dist");
+      const buildPath = path.join(tempDir, "build");
+      const finalOutputDir = fs.existsSync(distPath)
+        ? distPath
+        : fs.existsSync(buildPath)
+        ? buildPath
+        : null;
 
-    if (!finalOutputDir)
-      throw new Error('Could not find "dist" or "build" folder.');
+      if (!finalOutputDir)
+        throw new Error('Could not find "dist" or "build" folder.');
 
-    sendSystemLog("Initiating AWS S3 Cloud Upload...");
-    await uploadDirectoryToS3(
-      finalOutputDir,
-      finalOutputDir,
-      projectId,
-      deploymentId
-    );
+      sendSystemLog("Initiating AWS S3 Cloud Upload...");
+      await uploadDirectoryToS3(
+        finalOutputDir,
+        finalOutputDir,
+        projectId,
+        deploymentId
+      );
 
-    await updateStatus(deploymentId, "SUCCESS");
-    sendSystemLog("Deployment Complete! Project is now live globally.");
+      await updateStatus(deploymentId, "SUCCESS");
+      sendSystemLog("Deployment Complete! Project is now live globally.");
+    }
   } catch (error) {
     await updateStatus(deploymentId, "FAILED");
     sendSystemLog(`Build Failed: ${error.message}`);
@@ -506,6 +626,7 @@ app.get("/github/repos", async (req, res) => {
         headers: {
           Authorization: `Bearer ${realGithubToken}`,
           Accept: "application/vnd.github.v3+json",
+          "User-Agent": "Better-Vercel-Engine",
         },
       }
     );
@@ -539,7 +660,9 @@ app.use(async (req, res) => {
     const response = await fetch(s3Url);
 
     if (!response.ok) {
-      return res.status(404).send(`404 - File not found in AWS S3.`);
+      return res
+        .status(404)
+        .send(`404 - File not found in AWS S3 or Container inactive.`);
     }
 
     const exactContentType = mime.lookup(filePath) || "text/plain";
