@@ -12,9 +12,17 @@ const mime = require("mime-types");
 const { S3Client, PutObjectCommand } = require("@aws-sdk/client-s3");
 const jwt = require("jsonwebtoken");
 const net = require("net");
+const httpProxy = require("http-proxy");
 
 const app = express();
 const PORT = process.env.PORT || 8000;
+
+const proxy = httpProxy.createProxyServer({});
+proxy.on("error", function (err, req, res) {
+  res.status(500).send("502 Bad Gateway: Container is booting or down.");
+});
+
+const activeNextDeployments = new Map();
 
 let credentials = {};
 try {
@@ -276,39 +284,13 @@ CMD ["node", "server.js"]
       const runCommand = `docker run -d --name project-${projectId} --restart unless-stopped -p ${dynamicPort}:3000 ${dockerEnvString} image-${projectId}`;
       await runCommandWithLogs(runCommand, [], tempDir, deploymentId);
 
+      activeNextDeployments.set(projectId, dynamicPort);
+
       sendSystemLog(
         `✅ Container running successfully on internal port ${dynamicPort}`
       );
-
-      sendSystemLog("Configuring Live Cloud Routing (Nginx)...");
-      const nginxConfig = `server {
-    listen 80;
-    server_name ${projectId}.bettervercel.harsaroop.com;
-
-    location / {
-        proxy_pass http://127.0.0.1:${dynamicPort};
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection 'upgrade';
-        proxy_set_header Host $host;
-        proxy_cache_bypass $http_upgrade;
-    }
-}`;
-      const nginxFilePath = `/etc/nginx/conf.d/${projectId}.conf`;
-
-      try {
-        fs.writeFileSync(`/tmp/${projectId}.conf`, nginxConfig);
-        execSync(`sudo mv /tmp/${projectId}.conf ${nginxFilePath}`);
-        execSync("sudo systemctl reload nginx");
-        sendSystemLog("Reverse proxy reloaded. Traffic is live.");
-      } catch (nginxErr) {
-        throw new Error(`Routing configuration failed: ${nginxErr.message}`);
-      }
-
       await updateStatus(deploymentId, "SUCCESS");
-      sendSystemLog(
-        "Deployment Complete! Serverless architecture provisioned."
-      );
+      sendSystemLog("Deployment Complete! Securely routed via Node proxy.");
     } else {
       sendSystemLog(
         "Booting isolated Docker container for static compilation..."
@@ -650,6 +632,11 @@ app.use(async (req, res) => {
   const subdomain = req.hostname.split(".")[0];
   if (subdomain === "localhost" || subdomain === "api")
     return res.status(200).send("Welcome to the Better-Vercel Cloud Engine!");
+
+  if (activeNextDeployments.has(subdomain)) {
+    const targetPort = activeNextDeployments.get(subdomain);
+    return proxy.web(req, res, { target: `http://127.0.0.1:${targetPort}` });
+  }
 
   let filePath = req.path;
   if (filePath === "/") filePath = "/index.html";
