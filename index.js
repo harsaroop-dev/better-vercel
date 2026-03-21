@@ -14,21 +14,13 @@ const jwt = require("jsonwebtoken");
 const net = require("net");
 const httpProxy = require("http-proxy");
 
-process.on("uncaughtException", (err) =>
-  console.error("Uncaught Exception:", err)
-);
-process.on("unhandledRejection", (reason) =>
-  console.error("Unhandled Rejection:", reason)
-);
-
 const app = express();
 const PORT = process.env.PORT || 8000;
 
 const proxy = httpProxy.createProxyServer({});
 proxy.on("error", function (err, req, res) {
   if (!res.headersSent) {
-    res.writeHead(502, { "Content-Type": "text/plain" });
-    res.end("502 Bad Gateway");
+    res.status(502).send("502 Bad Gateway: Container is booting or down.");
   }
 });
 
@@ -46,7 +38,11 @@ try {
       "utf8"
     ),
   };
-} catch (err) {}
+} catch (err) {
+  console.log(
+    "⚠️ No SSL certs found or permission denied. Running in HTTP-only mode."
+  );
+}
 
 const httpServer = http.createServer(app);
 const httpsServer = credentials.key
@@ -55,7 +51,9 @@ const httpsServer = credentials.key
 
 const io = new Server({ cors: { origin: "*" } });
 io.attach(httpServer);
-if (httpsServer) io.attach(httpsServer);
+if (httpsServer) {
+  io.attach(httpsServer);
+}
 
 app.use(cors());
 app.use(express.json());
@@ -64,8 +62,6 @@ const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: { rejectUnauthorized: false },
 });
-
-pool.on("error", (err) => console.error("Database Pool Error:", err));
 
 const s3 = new S3Client({
   region: process.env.AWS_REGION,
@@ -104,6 +100,7 @@ function runCommandWithLogs(command, args, cwd, deploymentId) {
     const streamOutput = (data) => {
       const text = data.toString().trim();
       if (!text) return;
+      console.log(`[Docker Log] ${text}`);
       io.to(deploymentId).emit("build-log", text);
     };
 
@@ -138,6 +135,7 @@ async function uploadDirectoryToS3(dirPath, basePath, projectId, deploymentId) {
         .replace(/\\/g, "/");
       const s3Key = `deployments/${projectId}/${relativePath}`;
       const contentType = mime.lookup(fullPath) || "application/octet-stream";
+
       const fileStream = fs.createReadStream(fullPath);
 
       await s3.send(
@@ -148,6 +146,7 @@ async function uploadDirectoryToS3(dirPath, basePath, projectId, deploymentId) {
           ContentType: contentType,
         })
       );
+
       io.to(deploymentId).emit(
         "build-log",
         `☁️ Uploaded to S3: ${relativePath}`
@@ -165,6 +164,7 @@ async function buildProject(
 ) {
   const tempDir = path.join(TEMP_DIR, projectId);
   const sendSystemLog = (msg) => {
+    console.log(`[Project: ${projectId}] ${msg}`);
     io.to(deploymentId).emit("build-log", `👉 [System] ${msg}`);
   };
 
@@ -179,7 +179,9 @@ async function buildProject(
     if (fs.existsSync(tempDir)) {
       try {
         execSync(`sudo rm -rf "${tempDir}"`);
-      } catch (cleanErr) {}
+      } catch (cleanErr) {
+        sendSystemLog("Notice: Clean-up skipped or folder already empty.");
+      }
     }
 
     sendSystemLog("Cloning repository...");
@@ -219,7 +221,9 @@ async function buildProject(
             sendSystemLog(`Detected Node.js requirement: v${nodeVersion}`);
           }
         }
-      } catch (err) {}
+      } catch (err) {
+        sendSystemLog("Could not parse package.json, using default Node 20.");
+      }
     }
 
     if (isNextJs) {
@@ -230,6 +234,11 @@ async function buildProject(
         fs.writeFileSync(
           nextConfigPath,
           `module.exports = { output: 'standalone' };`
+        );
+        sendSystemLog("Injected next.config.js for standalone output.");
+      } else {
+        sendSystemLog(
+          "⚠️ Ensure your next.config.js has output: 'standalone' enabled for memory optimization."
         );
       }
 
@@ -258,9 +267,12 @@ CMD ["node", "server.js"]
 
       try {
         execSync(`docker rm -f project-${projectId}`, { stdio: "ignore" });
+        sendSystemLog("Removed previous container instance.");
       } catch (e) {}
 
-      sendSystemLog("🔨 Building Docker Image...");
+      sendSystemLog(
+        "🔨 Building Docker Image (This may take a few minutes)..."
+      );
 
       await runCommandWithLogs(
         `docker build --network host -t image-${projectId} .`,
@@ -269,7 +281,9 @@ CMD ["node", "server.js"]
         deploymentId
       );
 
+      sendSystemLog("Assigning dynamic port and booting container...");
       const dynamicPort = await getAvailablePort();
+
       const runCommand = `docker run -d --name project-${projectId} --restart unless-stopped -p ${dynamicPort}:3000 ${dockerEnvString} image-${projectId}`;
       await runCommandWithLogs(runCommand, [], tempDir, deploymentId);
 
@@ -278,7 +292,11 @@ CMD ["node", "server.js"]
       sendSystemLog(
         `✅ Container running successfully on internal port ${dynamicPort}`
       );
+
       await updateStatus(deploymentId, "SUCCESS");
+      sendSystemLog(
+        "Deployment Complete! Serverless architecture provisioned."
+      );
     } else {
       sendSystemLog(
         "Booting isolated Docker container for static compilation..."
@@ -286,20 +304,27 @@ CMD ["node", "server.js"]
       const dockerVolumePath = tempDir.replace(/\\/g, "/");
 
       const buildScript = `
+echo "Transferring files to native storage...";
 mkdir -p /build_env;
 cp -a /app/. /build_env/;
 cd /build_env;
 if [ -f package.json ]; then
-    if [ -f yarn.lock ]; then yarn install && yarn build;
-    elif [ -f pnpm-lock.yaml ]; then npm install -g pnpm && pnpm install && pnpm run build;
-    elif [ -f package-lock.json ]; then npm ci --no-audit --no-fund --prefer-offline && npm run build;
-    else npm install --no-audit --no-fund && npm run build;
+    if [ -f yarn.lock ]; then
+        echo "Yarn detected" && yarn install && yarn build;
+    elif [ -f pnpm-lock.yaml ]; then
+        echo "pnpm detected" && npm install -g pnpm && pnpm install && pnpm run build;
+    elif [ -f package-lock.json ]; then
+        echo "npm lockfile detected! Running optimized ci..." && npm ci --no-audit --no-fund --prefer-offline && npm run build;
+    else
+        echo "No lockfile detected. Running standard npm install..." && npm install --no-audit --no-fund && npm run build;
     fi;
 else
+    echo "No package.json found. Treating as static HTML project.";
     mkdir -p dist;
     find . -maxdepth 1 ! -name 'dist' ! -name '.' ! -name '..' -exec cp -r {} dist/ \\; ;
 fi;
 BUILD_EXIT=$?;
+echo "Transferring artifacts back to host...";
 if [ -d "dist" ]; then cp -a dist /app/; fi;
 if [ -d "build" ]; then cp -a build /app/; fi;
 chown -R 1000:1000 /app;
@@ -313,6 +338,7 @@ exit $BUILD_EXIT;
 
       await runCommandWithLogs(buildCommand, [], __dirname, deploymentId);
 
+      sendSystemLog("Locating compiled artifacts...");
       const distPath = path.join(tempDir, "dist");
       const buildPath = path.join(tempDir, "build");
       const finalOutputDir = fs.existsSync(distPath)
@@ -324,16 +350,20 @@ exit $BUILD_EXIT;
       if (!finalOutputDir)
         throw new Error('Could not find "dist" or "build" folder.');
 
+      sendSystemLog("Initiating AWS S3 Cloud Upload...");
       await uploadDirectoryToS3(
         finalOutputDir,
         finalOutputDir,
         projectId,
         deploymentId
       );
+
       await updateStatus(deploymentId, "SUCCESS");
+      sendSystemLog("Deployment Complete! Project is now live globally.");
     }
   } catch (error) {
     await updateStatus(deploymentId, "FAILED");
+    sendSystemLog(`Build Failed: ${error.message}`);
   } finally {
     if (fs.existsSync(tempDir)) {
       try {
@@ -357,7 +387,7 @@ app.post("/deploy", async (req, res) => {
       realGithubToken = decoded.githubToken;
       userId = decoded.userId;
     } catch (err) {
-      return res.status(401).json({ error: "Invalid session" });
+      return res.status(401).json({ error: "Invalid or expired session" });
     }
   }
 
@@ -366,11 +396,14 @@ app.post("/deploy", async (req, res) => {
       "SELECT user_id FROM deployments WHERE project_id = $1 LIMIT 1",
       [projectId]
     );
-    if (
-      existingProject.rows.length > 0 &&
-      existingProject.rows[0].user_id !== userId
-    ) {
-      return res.status(403).json({ error: "Project name taken." });
+
+    if (existingProject.rows.length > 0) {
+      if (existingProject.rows[0].user_id !== userId) {
+        return res.status(403).json({
+          error:
+            "Project name is already taken by another user. Please choose a unique name.",
+        });
+      }
     }
 
     const result = await pool.query(
@@ -381,29 +414,37 @@ app.post("/deploy", async (req, res) => {
 
     if (realGithubToken) {
       const match = gitUrl.match(/github\.com\/([^/]+)\/([^/.]+)/);
+
       if (match) {
+        const owner = match[1];
+        const repo = match[2];
+
         try {
-          await fetch(
-            `https://api.github.com/repos/${match[1]}/${match[2]}/hooks`,
-            {
-              method: "POST",
-              headers: {
-                Authorization: `Bearer ${realGithubToken}`,
-                Accept: "application/vnd.github.v3+json",
-                "User-Agent": "Better-Vercel-Engine",
+          await fetch(`https://api.github.com/repos/${owner}/${repo}/hooks`, {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${realGithubToken}`,
+              Accept: "application/vnd.github.v3+json",
+              "User-Agent": "Better-Vercel-Engine",
+            },
+            body: JSON.stringify({
+              name: "web",
+              active: true,
+              events: ["push"],
+              config: {
+                url: "http://13.127.96.165/webhook",
+                content_type: "json",
               },
-              body: JSON.stringify({
-                name: "web",
-                active: true,
-                events: ["push"],
-                config: {
-                  url: "http://13.127.96.165/webhook",
-                  content_type: "json",
-                },
-              }),
-            }
+            }),
+          });
+          console.log(
+            `[Auto-Webhook] Successfully injected webhook into ${owner}/${repo}`
           );
-        } catch (webhookErr) {}
+        } catch (webhookErr) {
+          console.log(
+            `[Auto-Webhook] Webhook setup skipped or already exists for ${owner}/${repo}`
+          );
+        }
       }
     }
 
@@ -414,13 +455,12 @@ app.post("/deploy", async (req, res) => {
       envVars || {},
       realGithubToken
     );
-    res
-      .status(200)
-      .json({
-        message: "Queued!",
-        deploymentId,
-        liveUrl: `https://${projectId}.bettervercel.harsaroop.com`,
-      });
+
+    res.status(200).json({
+      message: "Queued!",
+      deploymentId,
+      liveUrl: `https://${projectId}.bettervercel.harsaroop.com`,
+    });
   } catch (error) {
     res.status(500).json({ error: "Failed", details: error.message });
   }
@@ -428,39 +468,53 @@ app.post("/deploy", async (req, res) => {
 
 app.post("/webhook", async (req, res) => {
   const payload = req.body;
-  if (payload.ref !== "refs/heads/main" && payload.ref !== "refs/heads/master")
-    return res.status(200).send("Ignoring.");
+
+  if (
+    payload.ref !== "refs/heads/main" &&
+    payload.ref !== "refs/heads/master"
+  ) {
+    return res.status(200).send("Not a push to main. Ignoring.");
+  }
+
+  const gitUrl = payload.repository.clone_url;
 
   try {
     const result = await pool.query(
       "SELECT DISTINCT project_id, env_vars, user_id FROM deployments WHERE git_url = $1",
-      [payload.repository.clone_url]
+      [gitUrl]
     );
-    if (result.rows.length === 0)
-      return res.status(200).send("Not registered.");
+
+    if (result.rows.length === 0) {
+      return res.status(200).send("Repository not registered. Ignoring.");
+    }
 
     for (const project of result.rows) {
       const deployResult = await pool.query(
         "INSERT INTO deployments (project_id, git_url, env_vars, status, user_id) VALUES ($1, $2, $3, $4, $5) RETURNING id",
         [
           project.project_id,
-          payload.repository.clone_url,
+          gitUrl,
           project.env_vars,
           "QUEUED",
           project.user_id,
         ]
       );
+
+      const newDeploymentId = deployResult.rows[0].id;
+
       buildProject(
-        payload.repository.clone_url,
+        gitUrl,
         project.project_id,
-        deployResult.rows[0].id,
+        newDeploymentId,
         project.env_vars,
         ""
       );
     }
-    res.status(200).send("Triggered.");
+
+    res.status(200).send("Webhook received. Build triggered successfully.");
   } catch (error) {
-    res.status(500).send("Error");
+    console.error("Webhook Error:", error);
+    res.status(500).send("Internal Server Error");
   }
 });
 
@@ -468,32 +522,25 @@ app.get("/projects", async (req, res) => {
   const authHeader = req.headers.authorization;
   if (!authHeader) return res.status(401).json({ error: "Unauthorized" });
 
+  const appToken = authHeader.split(" ")[1];
+
   try {
-    const decoded = jwt.verify(
-      authHeader.split(" ")[1],
-      process.env.JWT_SECRET
-    );
+    const decoded = jwt.verify(appToken, process.env.JWT_SECRET);
+    const userId = decoded.userId;
+
     const result = await pool.query(
       "SELECT * FROM deployments WHERE user_id = $1 ORDER BY created_at DESC",
-      [decoded.userId]
+      [userId]
     );
     res.json(result.rows);
   } catch (error) {
-    res.status(500).json({ error: "Fetch failed" });
+    res.status(500).json({ error: "Failed to authenticate or fetch projects" });
   }
 });
 
 app.get("/auth/github", (req, res) => {
-  if (!process.env.GITHUB_CLIENT_ID) {
-    return res
-      .status(500)
-      .send(
-        "Server Configuration Error: GITHUB_CLIENT_ID is missing from AWS .env"
-      );
-  }
-  res.redirect(
-    `https://github.com/login/oauth/authorize?client_id=${process.env.GITHUB_CLIENT_ID}&scope=repo`
-  );
+  const githubAuthUrl = `https://github.com/login/oauth/authorize?client_id=${process.env.GITHUB_CLIENT_ID}&scope=repo`;
+  res.redirect(githubAuthUrl);
 });
 
 app.get("/auth/github/callback", async (req, res) => {
@@ -512,35 +559,42 @@ app.get("/auth/github/callback", async (req, res) => {
         body: JSON.stringify({
           client_id: process.env.GITHUB_CLIENT_ID,
           client_secret: process.env.GITHUB_CLIENT_SECRET,
-          code,
+          code: code,
         }),
       }
     );
-
     const tokenData = await tokenResponse.json();
-    if (!tokenData.access_token)
-      throw new Error("GitHub rejected the verification code.");
+    const accessToken = tokenData.access_token;
 
     const userResponse = await fetch("https://api.github.com/user", {
       headers: {
-        Authorization: `Bearer ${tokenData.access_token}`,
+        Authorization: `Bearer ${accessToken}`,
         "User-Agent": "Better-Vercel-Engine",
       },
     });
     const userData = await userResponse.json();
 
-    if (!userData || !userData.id)
-      throw new Error("Failed to fetch user data from GitHub.");
+    if (!userData || !userData.id) {
+      console.error("GitHub API Error:", userData);
+      return res.redirect(
+        `${process.env.FRONTEND_URL}?error=github_api_failed`
+      );
+    }
 
     const dbResult = await pool.query(
-      `INSERT INTO users (github_id, username, avatar_url) VALUES ($1, $2, $3) ON CONFLICT (github_id) DO UPDATE SET username = $2, avatar_url = $3 RETURNING id`,
+      `INSERT INTO users (github_id, username, avatar_url) 
+       VALUES ($1, $2, $3) 
+       ON CONFLICT (github_id) 
+       DO UPDATE SET username = $2, avatar_url = $3 
+       RETURNING id`,
       [userData.id.toString(), userData.login, userData.avatar_url]
     );
+    const internalUserId = dbResult.rows[0].id;
 
     const appToken = jwt.sign(
       {
-        userId: dbResult.rows[0].id,
-        githubToken: tokenData.access_token,
+        userId: internalUserId,
+        githubToken: accessToken,
         username: userData.login,
       },
       process.env.JWT_SECRET,
@@ -549,12 +603,8 @@ app.get("/auth/github/callback", async (req, res) => {
 
     res.redirect(`${process.env.FRONTEND_URL}?token=${appToken}`);
   } catch (error) {
-    console.error("OAuth Catch Block Error:", error);
-    res.redirect(
-      `${
-        process.env.FRONTEND_URL || "http://localhost:5173"
-      }?error=oauth_failed`
-    );
+    console.error("OAuth Error:", error);
+    res.redirect(`${process.env.FRONTEND_URL}?error=oauth_failed`);
   }
 });
 
@@ -562,16 +612,17 @@ app.get("/github/repos", async (req, res) => {
   const authHeader = req.headers.authorization;
   if (!authHeader) return res.status(401).json({ error: "Unauthorized" });
 
+  const appToken = authHeader.split(" ")[1];
+
   try {
-    const decoded = jwt.verify(
-      authHeader.split(" ")[1],
-      process.env.JWT_SECRET
-    );
+    const decoded = jwt.verify(appToken, process.env.JWT_SECRET);
+    const realGithubToken = decoded.githubToken;
+
     const reposResponse = await fetch(
       "https://api.github.com/user/repos?sort=updated&per_page=50",
       {
         headers: {
-          Authorization: `Bearer ${decoded.githubToken}`,
+          Authorization: `Bearer ${realGithubToken}`,
           Accept: "application/vnd.github.v3+json",
           "User-Agent": "Better-Vercel-Engine",
         },
@@ -579,11 +630,17 @@ app.get("/github/repos", async (req, res) => {
     );
 
     const repos = await reposResponse.json();
-    if (!Array.isArray(repos))
+
+    if (!Array.isArray(repos)) {
       return res.status(400).json({ error: "GitHub API error" });
+    }
+
     res.json(repos);
   } catch (error) {
-    res.status(500).json({ error: "Fetch failed" });
+    console.error("Repo Fetch Error:", error);
+    res
+      .status(500)
+      .json({ error: "Invalid token or failed to fetch repositories" });
   }
 });
 
@@ -593,38 +650,44 @@ app.use(async (req, res) => {
     return res.status(200).send("Welcome to the Better-Vercel Cloud Engine!");
 
   if (activeNextDeployments.has(subdomain)) {
-    return proxy.web(req, res, {
-      target: `http://127.0.0.1:${activeNextDeployments.get(subdomain)}`,
-    });
+    const targetPort = activeNextDeployments.get(subdomain);
+    return proxy.web(req, res, { target: `http://127.0.0.1:${targetPort}` });
   }
 
-  let filePath = req.path === "/" ? "/index.html" : req.path;
+  let filePath = req.path;
+  if (filePath === "/") filePath = "/index.html";
+
   const s3Url = `https://${process.env.AWS_S3_BUCKET_NAME}.s3.${process.env.AWS_REGION}.amazonaws.com/deployments/${subdomain}${filePath}`;
 
   try {
     const response = await fetch(s3Url);
-    if (!response.ok)
+
+    if (!response.ok) {
       return res
         .status(404)
         .send(`404 - File not found in AWS S3 or Container inactive.`);
+    }
 
     const exactContentType = mime.lookup(filePath) || "text/plain";
-    res.setHeader(
-      "Content-Type",
-      exactContentType === "text/html"
-        ? "text/html; charset=utf-8"
-        : exactContentType
-    );
-    res.send(Buffer.from(await response.arrayBuffer()));
+    if (exactContentType === "text/html") {
+      res.setHeader("Content-Type", "text/html; charset=utf-8");
+    } else {
+      res.setHeader("Content-Type", exactContentType);
+    }
+
+    const arrayBuffer = await response.arrayBuffer();
+    res.send(Buffer.from(arrayBuffer));
   } catch (error) {
     res.status(500).send("500 - Cloud Proxy Error");
   }
 });
 
-httpServer.listen(PORT, () =>
-  console.log(`\n🚀 HTTP Engine running on port ${PORT}`)
-);
-if (httpsServer)
-  httpsServer.listen(8443, () =>
-    console.log(`🔒 HTTPS Engine running securely on port 8443`)
-  );
+httpServer.listen(PORT, () => {
+  console.log(`\n🚀 HTTP Engine running on port ${PORT}`);
+});
+
+if (httpsServer) {
+  httpsServer.listen(8443, () => {
+    console.log(`🔒 HTTPS Engine running securely on port 8443`);
+  });
+}
