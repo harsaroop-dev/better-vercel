@@ -227,20 +227,7 @@ async function buildProject(
     }
 
     if (isNextJs) {
-      sendSystemLog("⚙️ Generating optimized Next.js Dockerfile...");
-
-      const nextConfigPath = path.join(tempDir, "next.config.js");
-      if (!fs.existsSync(nextConfigPath)) {
-        fs.writeFileSync(
-          nextConfigPath,
-          `module.exports = { output: 'standalone' };`
-        );
-        sendSystemLog("Injected next.config.js for standalone output.");
-      } else {
-        sendSystemLog(
-          "⚠️ Ensure your next.config.js has output: 'standalone' enabled for memory optimization."
-        );
-      }
+      sendSystemLog("⚙️ Generating Universal Next.js Dockerfile...");
 
       const dockerfileContent = `
 FROM node:${nodeVersion}-slim AS builder
@@ -249,16 +236,16 @@ COPY package*.json ./
 RUN npm install
 COPY . .
 RUN npm run build
-RUN mkdir -p /app/public
 
 FROM node:${nodeVersion}-slim AS runner
 WORKDIR /app
 ENV NODE_ENV production
+COPY --from=builder /app/package*.json ./
+COPY --from=builder /app/node_modules ./node_modules
+COPY --from=builder /app/.next ./.next
 COPY --from=builder /app/public ./public
-COPY --from=builder /app/.next/standalone ./
-COPY --from=builder /app/.next/static ./.next/static
 EXPOSE 3000
-CMD ["node", "server.js"]
+CMD ["npm", "start"]
       `;
       fs.writeFileSync(
         path.join(tempDir, "Dockerfile"),
