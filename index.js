@@ -160,7 +160,10 @@ async function buildProject(
   projectId,
   deploymentId,
   envVars = {},
-  githubToken = ""
+  githubToken = "",
+  rootDir = "./",
+  installCmd = "npm install",
+  buildCmd = "npm run build"
 ) {
   const tempDir = path.join(TEMP_DIR, projectId);
   const sendSystemLog = (msg) => {
@@ -197,11 +200,13 @@ async function buildProject(
       deploymentId
     );
 
+    const workingDir = path.join(tempDir, rootDir);
+
     sendSystemLog("Analyzing package.json for Node version and framework...");
     let nodeVersion = "20";
     let isNextJs = false;
 
-    const packageJsonPath = path.join(tempDir, "package.json");
+    const packageJsonPath = path.join(workingDir, "package.json");
     if (fs.existsSync(packageJsonPath)) {
       try {
         const pkgData = fs.readFileSync(packageJsonPath, "utf8");
@@ -233,21 +238,19 @@ async function buildProject(
 FROM node:${nodeVersion}-slim AS builder
 WORKDIR /app
 COPY package*.json ./
-RUN npm install
+RUN ${installCmd}
 COPY . .
-RUN npm run build
+RUN ${buildCmd}
 
 FROM node:${nodeVersion}-slim AS runner
 WORKDIR /app
 ENV NODE_ENV production
-# 1. Copy everything to preserve complex templates (Contentlayer, Prisma, etc.)
 COPY --from=builder /app ./
 EXPOSE 3000
-# 2. Force the production binary to bypass rogue package.json scripts
 CMD ["npx", "next", "start"]
       `;
       fs.writeFileSync(
-        path.join(tempDir, "Dockerfile"),
+        path.join(workingDir, "Dockerfile"),
         dockerfileContent.trim()
       );
 
@@ -263,7 +266,7 @@ CMD ["npx", "next", "start"]
       await runCommandWithLogs(
         `docker build --network host -t image-${projectId} .`,
         [],
-        tempDir,
+        workingDir,
         deploymentId
       );
 
@@ -271,7 +274,7 @@ CMD ["npx", "next", "start"]
       const dynamicPort = await getAvailablePort();
 
       const runCommand = `docker run -d --name project-${projectId} --restart unless-stopped -p ${dynamicPort}:3000 ${dockerEnvString} image-${projectId}`;
-      await runCommandWithLogs(runCommand, [], tempDir, deploymentId);
+      await runCommandWithLogs(runCommand, [], workingDir, deploymentId);
 
       activeNextDeployments.set(projectId, dynamicPort);
 
@@ -294,16 +297,10 @@ echo "Transferring files to native storage...";
 mkdir -p /build_env;
 cp -a /app/. /build_env/;
 cd /build_env;
+cd ${rootDir};
 if [ -f package.json ]; then
-    if [ -f yarn.lock ]; then
-        echo "Yarn detected" && yarn install && yarn build;
-    elif [ -f pnpm-lock.yaml ]; then
-        echo "pnpm detected" && npm install -g pnpm && pnpm install && pnpm run build;
-    elif [ -f package-lock.json ]; then
-        echo "npm lockfile detected! Running optimized ci..." && npm ci --no-audit --no-fund --prefer-offline && npm run build;
-    else
-        echo "No lockfile detected. Running standard npm install..." && npm install --no-audit --no-fund && npm run build;
-    fi;
+    echo "Running custom install and build overrides..."
+    ${installCmd} && ${buildCmd};
 else
     echo "No package.json found. Treating as static HTML project.";
     mkdir -p dist;
@@ -311,8 +308,8 @@ else
 fi;
 BUILD_EXIT=$?;
 echo "Transferring artifacts back to host...";
-if [ -d "dist" ]; then cp -a dist /app/; fi;
-if [ -d "build" ]; then cp -a build /app/; fi;
+if [ -d "dist" ]; then cp -a dist /app/${rootDir}; fi;
+if [ -d "build" ]; then cp -a build /app/${rootDir}; fi;
 chown -R 1000:1000 /app;
 exit $BUILD_EXIT;
 `;
@@ -325,8 +322,8 @@ exit $BUILD_EXIT;
       await runCommandWithLogs(buildCommand, [], __dirname, deploymentId);
 
       sendSystemLog("Locating compiled artifacts...");
-      const distPath = path.join(tempDir, "dist");
-      const buildPath = path.join(tempDir, "build");
+      const distPath = path.join(workingDir, "dist");
+      const buildPath = path.join(workingDir, "build");
       const finalOutputDir = fs.existsSync(distPath)
         ? distPath
         : fs.existsSync(buildPath)
@@ -360,7 +357,15 @@ exit $BUILD_EXIT;
 }
 
 app.post("/deploy", async (req, res) => {
-  const { gitUrl, projectId, envVars, githubToken: appToken } = req.body;
+  const {
+    gitUrl,
+    projectId,
+    envVars,
+    githubToken: appToken,
+    rootDir,
+    installCmd,
+    buildCmd,
+  } = req.body;
   if (!gitUrl || !projectId)
     return res.status(400).json({ error: "Missing parameters" });
 
@@ -439,7 +444,10 @@ app.post("/deploy", async (req, res) => {
       projectId,
       deploymentId,
       envVars || {},
-      realGithubToken
+      realGithubToken,
+      rootDir,
+      installCmd,
+      buildCmd
     );
 
     res.status(200).json({
@@ -493,7 +501,10 @@ app.post("/webhook", async (req, res) => {
         project.project_id,
         newDeploymentId,
         project.env_vars,
-        ""
+        "",
+        "./",
+        "npm install",
+        "npm run build"
       );
     }
 
@@ -615,7 +626,7 @@ app.get("/github/repos", async (req, res) => {
       }
     );
 
-    const repos = await reposResponse.json();
+    const repos = await repos.json();
 
     if (!Array.isArray(repos)) {
       return res.status(400).json({ error: "GitHub API error" });

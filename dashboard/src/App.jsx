@@ -15,6 +15,7 @@ import {
   Calendar,
   ExternalLink,
   Lock,
+  Settings2,
 } from "lucide-react";
 import "./App.css";
 
@@ -28,6 +29,12 @@ function App() {
 
   const [gitUrl, setGitUrl] = useState("");
   const [projectId, setProjectId] = useState("");
+
+  const [rootDir, setRootDir] = useState("");
+  const [installCmd, setInstallCmd] = useState("");
+  const [buildCmd, setBuildCmd] = useState("");
+  const [showAdvanced, setShowAdvanced] = useState(false);
+
   const [status, setStatus] = useState("IDLE");
   const [deploymentId, setDeploymentId] = useState(null);
   const [liveUrl, setLiveUrl] = useState("");
@@ -126,6 +133,9 @@ function App() {
           projectId,
           envVars: formattedEnvVars,
           githubToken,
+          rootDir: rootDir || "./",
+          installCmd: installCmd || "npm install",
+          buildCmd: buildCmd || "npm run build",
         }),
       });
 
@@ -232,7 +242,6 @@ function App() {
       {activeTab === "deploy" && (
         <div className="card">
           <form onSubmit={handleDeploy}>
-            {/* --- UPGRADED: LOCKED DOWN UI --- */}
             <div className="input-group">
               <label
                 style={{
@@ -339,6 +348,7 @@ function App() {
             <div
               className="input-group"
               style={{
+                marginTop: "24px",
                 opacity: githubToken ? 1 : 0.5,
                 pointerEvents: githubToken ? "auto" : "none",
               }}
@@ -358,6 +368,93 @@ function App() {
                   disabled={isDeploying || !githubToken}
                 />
               </div>
+            </div>
+
+            {/* --- NEW: ADVANCED BUILD SETTINGS --- */}
+            <div
+              style={{
+                marginTop: "24px",
+                padding: "16px",
+                backgroundColor: "#0f172a",
+                borderRadius: "8px",
+                border: "1px solid #1e293b",
+                opacity: githubToken ? 1 : 0.5,
+                pointerEvents: githubToken ? "auto" : "none",
+              }}
+            >
+              <button
+                type="button"
+                onClick={() => setShowAdvanced(!showAdvanced)}
+                style={{
+                  background: "none",
+                  border: "none",
+                  color: "#94a3b8",
+                  cursor: "pointer",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "8px",
+                  width: "100%",
+                  fontSize: "0.875rem",
+                  fontWeight: "bold",
+                }}
+              >
+                <Settings2 size={16} />
+                Advanced Build Settings
+              </button>
+
+              {showAdvanced && (
+                <div
+                  style={{
+                    marginTop: "16px",
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: "16px",
+                  }}
+                >
+                  <div className="input-group">
+                    <label style={{ fontSize: "0.75rem", color: "#64748b" }}>
+                      Root Directory
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="./"
+                      value={rootDir}
+                      onChange={(e) => setRootDir(e.target.value)}
+                      className="input-field"
+                      disabled={isDeploying}
+                      style={{ paddingLeft: "12px", fontSize: "0.875rem" }}
+                    />
+                  </div>
+                  <div className="input-group">
+                    <label style={{ fontSize: "0.75rem", color: "#64748b" }}>
+                      Install Command
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="npm install"
+                      value={installCmd}
+                      onChange={(e) => setInstallCmd(e.target.value)}
+                      className="input-field"
+                      disabled={isDeploying}
+                      style={{ paddingLeft: "12px", fontSize: "0.875rem" }}
+                    />
+                  </div>
+                  <div className="input-group">
+                    <label style={{ fontSize: "0.75rem", color: "#64748b" }}>
+                      Build Command
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="npm run build"
+                      value={buildCmd}
+                      onChange={(e) => setBuildCmd(e.target.value)}
+                      className="input-field"
+                      disabled={isDeploying}
+                      style={{ paddingLeft: "12px", fontSize: "0.875rem" }}
+                    />
+                  </div>
+                </div>
+              )}
             </div>
 
             <div
@@ -454,7 +551,7 @@ function App() {
               type="submit"
               disabled={isDeploying || !gitUrl || !projectId || !githubToken}
               className="deploy-btn"
-              style={{ opacity: githubToken ? 1 : 0.5 }}
+              style={{ opacity: githubToken ? 1 : 0.5, marginTop: "24px" }}
             >
               {isDeploying ? (
                 <>
