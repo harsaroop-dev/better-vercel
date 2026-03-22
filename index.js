@@ -642,9 +642,35 @@ app.get("/github/repos", async (req, res) => {
 });
 
 app.use(async (req, res) => {
+  if (
+    req.hostname === "bettervercel.harsaroop.com" ||
+    req.hostname === "www.bettervercel.harsaroop.com" ||
+    req.hostname === "localhost"
+  ) {
+    let filePath = req.path === "/" ? "/index.html" : req.path;
+    let fullPath = path.join(__dirname, "dist", filePath);
+
+    if (!fs.existsSync(fullPath)) {
+      fullPath = path.join(__dirname, "dist", "index.html");
+    }
+
+    const exactContentType = mime.lookup(fullPath) || "text/plain";
+    if (exactContentType === "text/html") {
+      res.setHeader("Content-Type", "text/html; charset=utf-8");
+    } else {
+      res.setHeader("Content-Type", exactContentType);
+    }
+
+    try {
+      return res.send(fs.readFileSync(fullPath));
+    } catch (err) {
+      return res
+        .status(404)
+        .send("Frontend build not found. Please upload the dist folder.");
+    }
+  }
+
   const subdomain = req.hostname.split(".")[0];
-  if (subdomain === "localhost" || subdomain === "api")
-    return res.status(200).send("Welcome to the Better-Vercel Cloud Engine!");
 
   if (activeNextDeployments.has(subdomain)) {
     const targetPort = activeNextDeployments.get(subdomain);
