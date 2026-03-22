@@ -98,8 +98,15 @@ function runCommandWithLogs(command, args, cwd, deploymentId) {
     const child = spawn(command, args, { cwd, shell: true });
 
     const streamOutput = (data) => {
-      const text = data.toString().trim();
+      let text = data.toString().trim();
       if (!text) return;
+
+      text = text.replace(/gh[pousr]_[a-zA-Z0-9]{36}/g, "***[HIDDEN-TOKEN]***");
+      text = text.replace(
+        /https:\/\/[^@]+@github\.com/g,
+        "https://***@github.com"
+      );
+
       console.log(`[Docker Log] ${text}`);
       io.to(deploymentId).emit("build-log", text);
     };
@@ -181,7 +188,7 @@ async function buildProject(
 
     if (fs.existsSync(tempDir)) {
       try {
-        execSync(`sudo rm -rf "${tempDir}"`);
+        fs.rmSync(tempDir, { recursive: true, force: true });
       } catch (cleanErr) {
         sendSystemLog("Notice: Clean-up skipped or folder already empty.");
       }
@@ -200,7 +207,14 @@ async function buildProject(
       deploymentId
     );
 
-    const workingDir = path.join(tempDir, rootDir);
+    const workingDir = path.resolve(tempDir, rootDir || "./");
+    if (!workingDir.startsWith(path.resolve(tempDir))) {
+      await updateStatus(deploymentId, "FAILED");
+      sendSystemLog(
+        "Security Violation: Invalid Root Directory traversal attempt."
+      );
+      return;
+    }
 
     sendSystemLog("Analyzing package.json for Node version and framework...");
     let nodeVersion = "20";
@@ -273,7 +287,7 @@ CMD ["npx", "next", "start"]
       sendSystemLog("Assigning dynamic port and booting container...");
       const dynamicPort = await getAvailablePort();
 
-      const runCommand = `docker run -d --name project-${projectId} --restart unless-stopped -p ${dynamicPort}:3000 ${dockerEnvString} image-${projectId}`;
+      const runCommand = `docker run -d --name project-${projectId} --memory="256m" --cpus="0.5" --restart unless-stopped -p ${dynamicPort}:3000 ${dockerEnvString} image-${projectId}`;
       await runCommandWithLogs(runCommand, [], workingDir, deploymentId);
 
       activeNextDeployments.set(projectId, dynamicPort);
@@ -314,7 +328,7 @@ chown -R 1000:1000 /app;
 exit $BUILD_EXIT;
 `;
 
-      const buildCommand = `docker run --rm --network host -v "${dockerVolumePath}:/app" ${dockerEnvString}node:${nodeVersion}-slim sh -c '${buildScript.replace(
+      const buildCommand = `docker run --rm --network host --memory="512m" --cpus="0.8" -v "${dockerVolumePath}:/app" ${dockerEnvString}node:${nodeVersion}-slim sh -c '${buildScript.replace(
         /\n/g,
         " "
       )}'`;
@@ -350,7 +364,7 @@ exit $BUILD_EXIT;
   } finally {
     if (fs.existsSync(tempDir)) {
       try {
-        execSync(`sudo rm -rf "${tempDir}"`);
+        fs.rmSync(tempDir, { recursive: true, force: true });
       } catch (cleanErr) {}
     }
   }
@@ -366,8 +380,18 @@ app.post("/deploy", async (req, res) => {
     installCmd,
     buildCmd,
   } = req.body;
+
   if (!gitUrl || !projectId)
     return res.status(400).json({ error: "Missing parameters" });
+
+  const projectIdRegex = /^[a-zA-Z0-9-]+$/;
+  if (!projectIdRegex.test(projectId)) {
+    return res
+      .status(400)
+      .json({
+        error: "Invalid Project ID. Only alphanumeric and dashes allowed.",
+      });
+  }
 
   let realGithubToken = "";
   let userId = null;
@@ -642,6 +666,10 @@ app.get("/github/repos", async (req, res) => {
 });
 
 app.use(async (req, res) => {
+  if (!req.hostname) {
+    return res.status(400).send("Bad Request");
+  }
+
   if (
     req.hostname === "bettervercel.harsaroop.com" ||
     req.hostname === "www.bettervercel.harsaroop.com" ||
