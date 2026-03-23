@@ -158,6 +158,11 @@ async function uploadDirectoryToS3(dirPath, basePath, projectId, deploymentId) {
 
   for (const file of files) {
     const fullPath = path.join(dirPath, file);
+    if (fs.lstatSync(fullPath).isSymbolicLink()) {
+      console.log(`[Security] Blocked symlink upload: ${fullPath}`);
+      continue;
+    }
+
     if (fs.statSync(fullPath).isDirectory()) {
       await uploadDirectoryToS3(fullPath, basePath, projectId, deploymentId);
     } else {
@@ -408,10 +413,28 @@ app.post("/deploy", deployLimiter, async (req, res) => {
   if (!gitUrl || !projectId)
     return res.status(400).json({ error: "Missing parameters" });
 
+  if (!gitUrl.startsWith("https://github.com/")) {
+    return res.status(400).json({
+      error: "Invalid repository URL. Must be a GitHub repository.",
+    });
+  }
+
   const projectIdRegex = /^[a-zA-Z0-9-]+$/;
   if (!projectIdRegex.test(projectId)) {
     return res.status(400).json({
       error: "Invalid Project ID. Only alphanumeric and dashes allowed.",
+    });
+  }
+
+  const safeCmdRegex = /^[a-zA-Z0-9\s\-_.:]+$/;
+  if (installCmd && !safeCmdRegex.test(installCmd)) {
+    return res.status(400).json({
+      error: "Invalid install command. Illegal characters detected.",
+    });
+  }
+  if (buildCmd && !safeCmdRegex.test(buildCmd)) {
+    return res.status(400).json({
+      error: "Invalid build command. Illegal characters detected.",
     });
   }
 
