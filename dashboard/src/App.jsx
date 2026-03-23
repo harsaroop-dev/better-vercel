@@ -145,6 +145,15 @@ function App() {
         setDeploymentId(data.deploymentId);
         setLiveUrl(data.liveUrl);
         setStatus("QUEUED");
+      } else if (response.status === 429) {
+        setStatus("FAILED");
+        setLogs((prev) => [
+          ...prev,
+          `[Security] ${
+            data.error ||
+            "Rate limit exceeded. Please wait a minute before deploying again."
+          }`,
+        ]);
       } else {
         setStatus("FAILED");
         setLogs((prev) => [
@@ -370,7 +379,6 @@ function App() {
               </div>
             </div>
 
-            {/* --- NEW: ADVANCED BUILD SETTINGS --- */}
             <div
               style={{
                 marginTop: "24px",

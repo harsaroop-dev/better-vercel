@@ -13,9 +13,22 @@ const { S3Client, PutObjectCommand } = require("@aws-sdk/client-s3");
 const jwt = require("jsonwebtoken");
 const net = require("net");
 const httpProxy = require("http-proxy");
+const crypto = require("crypto");
+const rateLimit = require("express-rate-limit");
 
 const app = express();
 const PORT = process.env.PORT || 8000;
+
+const deployLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 3,
+  message: {
+    error:
+      "Rate limit exceeded. Please wait a minute before triggering another deployment.",
+  },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
 
 const proxy = httpProxy.createProxyServer({});
 proxy.on("error", function (err, req, res) {
@@ -55,8 +68,19 @@ if (httpsServer) {
   io.attach(httpsServer);
 }
 
-app.use(cors());
-app.use(express.json());
+app.use(
+  cors({
+    origin: ["https://bettervercel.harsaroop.com", "http://localhost:5173"],
+  })
+);
+
+app.use(
+  express.json({
+    verify: (req, res, buf) => {
+      req.rawBody = buf;
+    },
+  })
+);
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
@@ -370,7 +394,7 @@ exit $BUILD_EXIT;
   }
 }
 
-app.post("/deploy", async (req, res) => {
+app.post("/deploy", deployLimiter, async (req, res) => {
   const {
     gitUrl,
     projectId,
@@ -445,8 +469,9 @@ app.post("/deploy", async (req, res) => {
               active: true,
               events: ["push"],
               config: {
-                url: "http://13.127.96.165/webhook",
+                url: "https://bettervercel.harsaroop.com/webhook",
                 content_type: "json",
+                secret: process.env.GITHUB_WEBHOOK_SECRET,
               },
             }),
           });
@@ -483,6 +508,25 @@ app.post("/deploy", async (req, res) => {
 });
 
 app.post("/webhook", async (req, res) => {
+  const signature = req.headers["x-hub-signature-256"];
+  const secret = process.env.GITHUB_WEBHOOK_SECRET;
+
+  if (secret && signature) {
+    const hmac = crypto.createHmac("sha256", secret);
+    const digest = "sha256=" + hmac.update(req.rawBody).digest("hex");
+
+    const sigBuf = Buffer.from(signature);
+    const digBuf = Buffer.from(digest);
+
+    if (
+      sigBuf.length !== digBuf.length ||
+      !crypto.timingSafeEqual(sigBuf, digBuf)
+    ) {
+      console.error("[Security] Blocked unauthorized webhook attempt.");
+      return res.status(401).send("Unauthorized: Invalid Webhook Signature");
+    }
+  }
+
   const payload = req.body;
 
   if (
