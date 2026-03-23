@@ -278,7 +278,7 @@ CMD ["npx", "next", "start"]
       );
 
       await runCommandWithLogs(
-        `docker build --network host -t image-${projectId} .`,
+        `docker build -t image-${projectId} .`,
         [],
         workingDir,
         deploymentId
@@ -328,7 +328,7 @@ chown -R 1000:1000 /app;
 exit $BUILD_EXIT;
 `;
 
-      const buildCommand = `docker run --rm --network host --memory="512m" --cpus="0.8" -v "${dockerVolumePath}:/app" ${dockerEnvString}node:${nodeVersion}-slim sh -c '${buildScript.replace(
+      const buildCommand = `docker run --rm --memory="512m" --cpus="0.8" -v "${dockerVolumePath}:/app" ${dockerEnvString}node:${nodeVersion}-slim sh -c '${buildScript.replace(
         /\n/g,
         " "
       )}'`;
@@ -386,11 +386,9 @@ app.post("/deploy", async (req, res) => {
 
   const projectIdRegex = /^[a-zA-Z0-9-]+$/;
   if (!projectIdRegex.test(projectId)) {
-    return res
-      .status(400)
-      .json({
-        error: "Invalid Project ID. Only alphanumeric and dashes allowed.",
-      });
+    return res.status(400).json({
+      error: "Invalid Project ID. Only alphanumeric and dashes allowed.",
+    });
   }
 
   let realGithubToken = "";
