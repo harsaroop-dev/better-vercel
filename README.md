@@ -86,7 +86,7 @@ Building a deployment engine on a heavily constrained Free-Tier instance require
    GITHUB_CLIENT_SECRET=your_oauth_secret
    GITHUB_WEBHOOK_SECRET=your_crypto_secret
    JWT_SECRET=your_jwt_secret
-   FRONTEND_URL=http://localhost:5173 
+   FRONTEND_URL=http://localhost:5173
    ```
 4. Start the engine: `node index.js`
 
