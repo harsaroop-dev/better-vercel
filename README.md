@@ -1,6 +1,6 @@
 # 🚀 Better-Vercel: Custom CI/CD Engine & Cloud PaaS
 
-🔴 **Live Platform:** [https://bettervercel.harsaroop.com](https://bettervercel.harsaroop.com)
+**Note:** The live deployment on AWS EC2 has been taken offline as the free tier expired.
 
 A high-performance, automated deployment pipeline and Platform-as-a-Service (PaaS) built entirely from scratch. This project replicates the core infrastructure of platforms like Vercel, orchestrating isolated Docker builds, managing stateful Next.js containers, and operating a custom Layer-7 reverse proxy for dynamic wildcard DNS routing.
 
